@@ -62,6 +62,7 @@ See [PrimedGun Setup Guide.pdf](<PrimedGun Setup Guide.pdf>) for screenshot help
 5. Click `INACTIVE` to start writing transforms.
 6. While moving your head, use Dolphin's reset-view toggle to line the arm cannon up with your controller position.
    It's best to assign the reset-view toggle to your controller for this.
+   Dolphin's game window must be focused for Dolphin hotkeys to register.
 7. If playing seated or standing, adjust the Y axis in `Offset Tuning` as needed.
 
 ## Notes
