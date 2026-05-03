@@ -28,6 +28,8 @@ struct AppState {
     Pose  last_pose     = {};
     std::string dolphin_status;
     std::string openvr_status;
+    bool  game_rev0_ok = false;
+    std::string game_status = "Game: not checked";
     uint32_t dbg_state_mgr  = 0;
     uint32_t dbg_player     = 0;
     uint32_t dbg_pitch_addr = 0;
@@ -79,26 +81,24 @@ inline void draw_gui(Settings& s, AppState& app,
 
     // ── Status bar ───────────────────────────
     ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({500 * UI_SCALE, 60}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({500 * UI_SCALE, 78}, ImGuiCond_Always);
 
     ImGui::Begin("##status", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
 
     ImGui::TextColored(
-        app.dolphin_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
-        "Dolphin: %s", app.dolphin_status.c_str());
-
-    ImGui::SameLine(200 * UI_SCALE);
-
-    ImGui::TextColored(
         app.openvr_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
         "OpenVR: %s", app.openvr_status.c_str());
+
+    ImGui::TextColored(
+        app.game_rev0_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
+        "%s", app.game_status.c_str());
 
     ImGui::End();
 
     // ── Main window ──────────────────────────
-    ImGui::SetNextWindowPos({0, 45}, ImGuiCond_Once);
+    ImGui::SetNextWindowPos({0, 78}, ImGuiCond_Once);
     ImGui::SetNextWindowSize({520 * UI_SCALE, 600}, ImGuiCond_Once);
 
     ImGui::Begin("PrimedGun Settings");
@@ -141,6 +141,9 @@ inline void draw_gui(Settings& s, AppState& app,
     // ── Game ────────────────────────────────
     if (ImGui::CollapsingHeader("Game")) {
         ImGui::Text("Metroid Prime GCN NTSC Rev 0 (GM8E01)");
+        ImGui::TextColored(
+            app.game_rev0_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
+            "%s", app.game_status.c_str());
 
         if (ImGui::Button("Reconnect Dolphin")) {
             app.reconnect_dolphin_requested.store(true, std::memory_order_relaxed);
@@ -345,7 +348,7 @@ inline void draw_gui(Settings& s, AppState& app,
     }
 
     ImGui::Spacing();
-    const char* credit = "By Nobbie  v0.9.1";
+    const char* credit = "By Nobbie  v0.9.2";
     const float credit_width = ImGui::CalcTextSize(credit).x;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + full_width - credit_width);
     ImGui::TextDisabled("%s", credit);

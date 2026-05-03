@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PrimedGun VERSION 0.9.1)
+project(PrimedGun VERSION 0.9.2)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,6 +35,7 @@ set(IMGUI_SOURCES
 # ── Sources ───────────────────────────────────────────────
 set(SOURCES
     src/main.cpp
+    src/PrimedGun.rc
     ${IMGUI_SOURCES}
 )
 
@@ -42,6 +43,7 @@ add_executable(PrimedGun WIN32 ${SOURCES})
 
 target_include_directories(PrimedGun PRIVATE
     src/
+    src/hook_common
     ${OPENVR_INCLUDE_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -57,18 +59,58 @@ target_link_libraries(PrimedGun
     ${OPENVR_LIB}
 )
 
-# Copy openvr_api.dll next to exe for distribution
-set(OPENVR_DLL "${OPENVR_DIR}/bin/win64/openvr_api.dll")
-if(EXISTS "${OPENVR_DLL}")
-    add_custom_command(TARGET PrimedGun POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${OPENVR_DLL}"
-            "$<TARGET_FILE_DIR:PrimedGun>/openvr_api.dll"
-        COMMENT "Copying openvr_api.dll"
-    )
+# Dolphin hook sidecar. This is separate from the existing PrimedGun app:
+# launcher starts/finds Dolphin, then injects the hook DLL into Dolphin.
+add_library(PrimedGunHookCommon INTERFACE)
+target_include_directories(PrimedGunHookCommon INTERFACE
+    src/hook_common
+)
+
+add_executable(PrimedGun_Launcher
+    src/launcher/main.cpp
+)
+target_link_libraries(PrimedGun_Launcher PRIVATE PrimedGunHookCommon)
+target_compile_features(PrimedGun_Launcher PRIVATE cxx_std_20)
+target_compile_definitions(PrimedGun_Launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+add_library(PrimedGun_DolphinHook SHARED
+    src/dolphin_hook/dllmain.cpp
+    src/dolphin_hook/GameTimingHooks.cpp
+    src/dolphin_hook/GraphicsHooks.cpp
+    src/dolphin_hook/HookRuntime.cpp
+    src/dolphin_hook/Ipc.cpp
+    src/dolphin_hook/JitHooks.cpp
+    src/dolphin_hook/VulkanHooks.cpp
+)
+target_link_libraries(PrimedGun_DolphinHook PRIVATE PrimedGunHookCommon)
+target_compile_features(PrimedGun_DolphinHook PRIVATE cxx_std_20)
+target_compile_definitions(PrimedGun_DolphinHook PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PRIMEDGUN_DOLPHINHOOK_EXPORTS)
+target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi)
+set_target_properties(PrimedGun_DolphinHook PROPERTIES PREFIX "")
+
+if(MINGW)
+    target_link_options(PrimedGun_Launcher PRIVATE -municode)
 endif()
 
-# Copy MinGW runtime DLLs next to exe for distribution builds.
+# Copy runtime DLLs next to the built binaries for direct build\bin launches.
+set(OPENVR_DLL "${OPENVR_DIR}/bin/win64/openvr_api.dll")
+set(PRIMEDGUN_RUNTIME_TARGETS
+    PrimedGun
+    PrimedGun_Launcher
+    PrimedGun_DolphinHook
+)
+
+foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
+    if(EXISTS "${OPENVR_DLL}")
+        add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${OPENVR_DLL}"
+                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/openvr_api.dll"
+            COMMENT "Copying openvr_api.dll for ${RUNTIME_TARGET}"
+        )
+    endif()
+endforeach()
+
 if(MINGW)
     get_filename_component(MINGW_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
     set(MINGW_RUNTIME_DLLS
@@ -80,12 +122,14 @@ if(MINGW)
     foreach(DLL_NAME IN LISTS MINGW_RUNTIME_DLLS)
         set(DLL_PATH "${MINGW_BIN_DIR}/${DLL_NAME}")
         if(EXISTS "${DLL_PATH}")
-            add_custom_command(TARGET PrimedGun POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DLL_PATH}"
-                    "$<TARGET_FILE_DIR:PrimedGun>/${DLL_NAME}"
-                COMMENT "Copying ${DLL_NAME}"
-            )
+            foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
+                add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DLL_PATH}"
+                        "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/${DLL_NAME}"
+                    COMMENT "Copying ${DLL_NAME} for ${RUNTIME_TARGET}"
+                )
+            endforeach()
         else()
             message(WARNING "MinGW runtime DLL not found: ${DLL_PATH}")
         endif()

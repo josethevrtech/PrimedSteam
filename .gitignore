@@ -16,3 +16,13 @@ cmake_install.cmake
 *.vcxproj*
 *.sln
 .vs/
+reference/
+
+# Local setup-guide editing sources and screenshots.
+PrimedGun Setup Guide Source.md
+tools/
+hotkey reset view.png
+line up.png
+map input.png
+scaling.png
+throttling behavior.png

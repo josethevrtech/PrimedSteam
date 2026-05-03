@@ -1,0 +1,67 @@
+#pragma once
+
+#include <cstdint>
+
+namespace PrimedGun {
+
+inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
+inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
+inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
+inline constexpr uint32_t SharedStateVersion = 1;
+
+struct Vec3 {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+struct Quat {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 1.0f;
+};
+
+struct PoseState {
+    Vec3 positionMeters{};
+    Quat orientation{};
+    Vec3 linearVelocityMetersPerSecond{};
+    Vec3 angularVelocityRadiansPerSecond{};
+};
+
+struct CenterEyeViewport {
+    uint32_t enabled = 1;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 1.0f;
+    float height = 1.0f;
+};
+
+struct SettingsState {
+    uint32_t enableCenterEyeViewport = 1;
+    uint32_t enableGraphicsHooks = 1;
+    uint32_t enableVrApiHooks = 1;
+    float worldScale = 1.0f;
+    CenterEyeViewport centerEyeViewport{};
+};
+
+struct GameState {
+    uint32_t gameIdHash = 0;
+    uint32_t inGame = 0;
+    uint32_t inMenu = 0;
+    uint32_t frameIndex = 0;
+};
+
+struct SharedState {
+    uint32_t magic = SharedStateMagic;
+    uint32_t version = SharedStateVersion;
+    uint64_t appHeartbeat = 0;
+    uint64_t hookHeartbeat = 0;
+    PoseState hmdPose{};
+    PoseState leftHandPose{};
+    PoseState rightHandPose{};
+    SettingsState settings{};
+    GameState game{};
+};
+
+} // namespace PrimedGun

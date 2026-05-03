@@ -35,7 +35,7 @@ public:
         system_ = vr::VR_Init(&err, vr::VRApplication_Background);
         if (err != vr::VRInitError_None) {
             system_ = nullptr;
-            status_ = "VR_Init failed: " + std::string(vr::VR_GetVRInitErrorAsEnglishDescription(err));
+            status_ = "start SteamVR";
             return false;
         }
         status_ = "Connected";

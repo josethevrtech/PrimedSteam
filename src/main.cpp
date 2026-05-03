@@ -7,8 +7,12 @@
 #include <atomic>
 #include <mutex>
 #include <fstream>
+#include <filesystem>
+#include <optional>
+#include <string_view>
 #include <vector>
 #include <cstring>
+#include <tlhelp32.h>
 
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
@@ -18,6 +22,10 @@
 #include "dolphin_memory.h"
 #include "openvr_manager.h"
 #include "gui.h"
+#include "resource.h"
+#include "PrimedGunShared.h"
+
+namespace fs = std::filesystem;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
     HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -32,6 +40,7 @@ static Settings       g_settings;
 static AppState       g_app;
 static DolphinMemory  g_dolphin;
 static OpenVRManager  g_openvr;
+static std::wofstream g_hook_log;
 
 static float g_smooth_mat[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
 static float g_smooth_pitch = 0.0f;
@@ -93,6 +102,229 @@ static constexpr uint32_t k_cannon_rotation_offsets[9] = {
     0x4B8, 0x4BC, 0x4C0,
     0x4C8, 0x4CC, 0x4D0,
 };
+
+static fs::path local_app_data_path() {
+    wchar_t buffer[MAX_PATH] = {};
+    const DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(MAX_PATH));
+    if (len == 0 || len >= MAX_PATH)
+        return fs::temp_directory_path();
+    return fs::path(buffer);
+}
+
+static void app_hook_log(std::wstring_view message) {
+    if (g_hook_log.is_open()) {
+        g_hook_log << message << L"\n";
+        g_hook_log.flush();
+    }
+}
+
+static void open_app_hook_log() {
+    std::error_code ec;
+    const fs::path log_dir = local_app_data_path() / L"PrimedGun";
+    fs::create_directories(log_dir, ec);
+    g_hook_log.open(log_dir / L"PrimedGun_AppHook.log", std::ios::app);
+}
+
+static fs::path exe_directory() {
+    wchar_t buffer[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(MAX_PATH));
+    return fs::path(buffer).parent_path();
+}
+
+static std::optional<DWORD> find_process_id_by_name(const wchar_t* exe_name) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return std::nullopt;
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, exe_name) == 0) {
+                CloseHandle(snapshot);
+                return entry.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return std::nullopt;
+}
+
+static bool is_module_loaded(DWORD process_id, const fs::path& module_path) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return false;
+
+    std::error_code ec;
+    const std::wstring wanted = fs::weakly_canonical(module_path, ec).wstring();
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            std::error_code current_ec;
+            const fs::path current = fs::weakly_canonical(entry.szExePath, current_ec);
+            if (!current_ec && _wcsicmp(current.wstring().c_str(), wanted.c_str()) == 0) {
+                CloseHandle(snapshot);
+                return true;
+            }
+        } while (Module32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return false;
+}
+
+struct StartedDolphinProcess {
+    DWORD process_id = 0;
+    HANDLE process = nullptr;
+    HANDLE thread = nullptr;
+};
+
+static std::optional<StartedDolphinProcess> start_dolphin_suspended(const fs::path& dolphin_path) {
+    if (!fs::exists(dolphin_path)) {
+        app_hook_log(L"Dolphin path does not exist: " + dolphin_path.wstring());
+        return std::nullopt;
+    }
+
+    std::wstring command_line = L"\"" + dolphin_path.wstring() + L"\"";
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const fs::path working_directory = dolphin_path.parent_path();
+    const BOOL ok = CreateProcessW(
+        dolphin_path.c_str(),
+        mutable_command.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_SUSPENDED,
+        nullptr,
+        working_directory.c_str(),
+        &startup,
+        &process);
+
+    if (!ok) {
+        app_hook_log(L"CreateProcessW failed for Dolphin.exe.");
+        return std::nullopt;
+    }
+
+    app_hook_log(L"PrimedGun.exe started Dolphin.exe suspended with pid " + std::to_wstring(process.dwProcessId));
+    return StartedDolphinProcess{process.dwProcessId, process.hProcess, process.hThread};
+}
+
+static bool inject_hook_dll(DWORD process_id, const fs::path& dll_path) {
+    if (is_module_loaded(process_id, dll_path)) {
+        app_hook_log(L"Hook DLL is already loaded in Dolphin.");
+        return true;
+    }
+
+    std::error_code ec;
+    const std::wstring full_dll_path = fs::weakly_canonical(dll_path, ec).wstring();
+    const size_t bytes = (full_dll_path.size() + 1) * sizeof(wchar_t);
+
+    HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+                                 PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+                                 FALSE, process_id);
+    if (!process) {
+        app_hook_log(L"OpenProcess failed for DLL injection. Run PrimedGun at the same elevation as Dolphin.");
+        return false;
+    }
+
+    void* remote_path = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote_path) {
+        app_hook_log(L"VirtualAllocEx failed for DLL injection.");
+        CloseHandle(process);
+        return false;
+    }
+
+    const BOOL wrote = WriteProcessMemory(process, remote_path, full_dll_path.c_str(), bytes, nullptr);
+    if (!wrote) {
+        app_hook_log(L"WriteProcessMemory failed for DLL injection.");
+        VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
+        CloseHandle(process);
+        return false;
+    }
+
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    auto* load_library = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetProcAddress(kernel32, "LoadLibraryW"));
+    HANDLE thread = CreateRemoteThread(process, nullptr, 0, load_library, remote_path, 0, nullptr);
+    if (!thread) {
+        app_hook_log(L"CreateRemoteThread failed for DLL injection.");
+        VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
+        CloseHandle(process);
+        return false;
+    }
+
+    WaitForSingleObject(thread, 10000);
+    DWORD exit_code = 0;
+    GetExitCodeThread(thread, &exit_code);
+    CloseHandle(thread);
+    VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
+    CloseHandle(process);
+
+    if (exit_code == 0) {
+        app_hook_log(L"LoadLibraryW returned null inside Dolphin.");
+        return false;
+    }
+
+    app_hook_log(L"PrimedGun.exe injected " + full_dll_path + L" into Dolphin.");
+    return true;
+}
+
+static void ensure_shared_state() {
+    HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        sizeof(PrimedGun::SharedState), PrimedGun::SharedMemoryName);
+    if (!mapping)
+        return;
+
+    auto* state = static_cast<PrimedGun::SharedState*>(
+        MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(PrimedGun::SharedState)));
+    if (!state) {
+        CloseHandle(mapping);
+        return;
+    }
+
+    if (state->magic != PrimedGun::SharedStateMagic || state->version != PrimedGun::SharedStateVersion)
+        *state = PrimedGun::SharedState{};
+    state->appHeartbeat++;
+
+    UnmapViewOfFile(state);
+    CloseHandle(mapping);
+}
+
+static bool ensure_dolphin_hook_loaded() {
+    ensure_shared_state();
+
+    const fs::path dll_path = exe_directory() / L"PrimedGun_DolphinHook.dll";
+    if (!fs::exists(dll_path)) {
+        app_hook_log(L"Missing hook DLL next to PrimedGun.exe: " + dll_path.wstring());
+        return false;
+    }
+
+    std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
+    if (dolphin_pid) {
+        app_hook_log(L"PrimedGun.exe found running Dolphin.exe with pid " + std::to_wstring(*dolphin_pid));
+        return inject_hook_dll(*dolphin_pid, dll_path);
+    }
+
+    const fs::path dolphin_path = L"G:\\Dolphin-OpenXR\\Release\\Dolphin.exe";
+    std::optional<StartedDolphinProcess> started = start_dolphin_suspended(dolphin_path);
+    if (!started) {
+        app_hook_log(L"Could not find or start Dolphin.exe.");
+        return false;
+    }
+
+    const bool injected = inject_hook_dll(started->process_id, dll_path);
+    ResumeThread(started->thread);
+    CloseHandle(started->thread);
+    CloseHandle(started->process);
+    app_hook_log(L"PrimedGun.exe resumed Dolphin.exe main thread.");
+    return injected;
+}
 
 static void push_timing_sample(float* hist, int& head, float ms) {
     hist[head & 15] = ms;
@@ -202,6 +434,28 @@ static bool read_player_yaw_from_transform2d(uint32_t addr, float& yaw_deg_out);
 static float wrap_angle_radians(float angle);
 static void apply_openvr_world_yaw(Pose& pose, float yaw_deg);
 
+static void update_game_revision_detection() {
+    if (!g_dolphin.is_connected()) {
+        g_app.game_rev0_ok = false;
+        g_app.game_status = "Load game: not ready, try reconnect";
+        return;
+    }
+
+    const uint32_t id0 = g_dolphin.read_u32(0x80000000);
+    const uint16_t id1 = g_dolphin.read_u16(0x80000004);
+    const uint8_t revision = g_dolphin.read_u8(0x80000007);
+    const bool is_gm8e01 = id0 == 0x474D3845u && id1 == 0x3031u; // "GM8E01"
+    g_app.game_rev0_ok = is_gm8e01 && revision == 0;
+
+    if (g_app.game_rev0_ok) {
+        g_app.game_status = "Load game: Rev 0 OK";
+    } else if (is_gm8e01) {
+        g_app.game_status = "Load game: wrong game revision";
+    } else {
+        g_app.game_status = "Load game: wrong game";
+    }
+}
+
 enum XrDpadDir {
     XrDpadNone = 0,
     XrDpadUp = 1,
@@ -218,43 +472,6 @@ static const char* xr_dpad_dir_name(XrDpadDir dir) {
     case XrDpadLeft: return "left";
     default: return "none";
     }
-}
-
-static void append_xr_dpad_debug(const char* phase, bool near_head, bool in_head_zone,
-                                 float stick_x, float stick_y, XrDpadDir raw_dir,
-                                 XrDpadDir final_dir, int latch_frames,
-                                 bool send_press_event, uint8_t held0,
-                                 uint8_t held1, uint8_t pressed0) {
-    static std::ofstream log;
-    static auto start = std::chrono::steady_clock::now();
-    static auto last_log = std::chrono::steady_clock::time_point{};
-    const auto now = std::chrono::steady_clock::now();
-    if (last_log.time_since_epoch().count() != 0 &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log).count() < 50) {
-        return;
-    }
-    last_log = now;
-
-    if (!log.is_open()) {
-        log.open("xr_dpad_debug.txt", std::ios::out | std::ios::trunc);
-        if (!log.is_open())
-            return;
-        log << "ms,phase,near_head,in_head_zone,stick_x,stick_y,raw_dir,final_dir,latch,press,held0,held1,pressed0\n";
-    }
-
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-    log << ms << ',' << phase << ','
-        << (near_head ? 1 : 0) << ','
-        << (in_head_zone ? 1 : 0) << ','
-        << stick_x << ',' << stick_y << ','
-        << xr_dpad_dir_name(raw_dir) << ','
-        << xr_dpad_dir_name(final_dir) << ','
-        << latch_frames << ','
-        << (send_press_event ? 1 : 0) << ','
-        << static_cast<int>(held0) << ','
-        << static_cast<int>(held1) << ','
-        << static_cast<int>(pressed0) << '\n';
-    log.flush();
 }
 
 static XrDpadDir get_stick_dpad_direction(float x, float y, float deadzone) {
@@ -523,13 +740,7 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
     } else if (s_latched_dir != XrDpadNone && now < s_latch_until) {
         dir = s_latched_dir;
     }
-    const int latch_ms_left =
-        (s_latched_dir != XrDpadNone && now < s_latch_until)
-            ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(s_latch_until - now).count())
-            : 0;
     if (dir == XrDpadNone) {
-        append_xr_dpad_debug("no_dir", near_head, in_head_zone, stick_x, stick_y,
-                             raw_dir, dir, latch_ms_left, false, 0, 0, 0);
         s_last_dir = XrDpadNone;
         s_dir_start = {};
         s_last_press_pulse = {};
@@ -586,9 +797,6 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
     g_dolphin.write_u8(state_mgr + k_final_input_dpad_held_0, held0);
     g_dolphin.write_u8(state_mgr + k_final_input_dpad_held_1, held1);
     g_dolphin.write_u8(state_mgr + k_final_input_dpad_pressed_0, pressed0);
-    append_xr_dpad_debug("publish", near_head, in_head_zone, stick_x, stick_y,
-                         raw_dir, dir, latch_ms_left, send_press_event,
-                         held0, held1, pressed0);
 
     g_app.dbg_xr_dpad_active = true;
     g_app.dbg_xr_dpad_dir = dir;
@@ -685,6 +893,36 @@ static bool read_player_yaw_from_transform2d(uint32_t addr, float& yaw_deg_out) 
 
     yaw_deg_out = std::atan2(m01, m00) * (180.0f / static_cast<float>(M_PI));
     return true;
+}
+
+static void flatten_active_camera_pitch(uint32_t camera_xf_addr) {
+    if (!looks_like_transform_matrix(camera_xf_addr))
+        return;
+
+    const float m00 = g_dolphin.read_float(camera_xf_addr + 0x00);
+    const float m01 = g_dolphin.read_float(camera_xf_addr + 0x04);
+    const float m10 = g_dolphin.read_float(camera_xf_addr + 0x10);
+    const float m11 = g_dolphin.read_float(camera_xf_addr + 0x14);
+    const float len0 = std::sqrt(m00 * m00 + m01 * m01);
+    if (!std::isfinite(len0) || len0 < 0.001f)
+        return;
+
+    const float det = (m00 * m11) - (m01 * m10);
+    const float handedness = det < 0.0f ? -1.0f : 1.0f;
+    const float right_x = m00 / len0;
+    const float right_y = m01 / len0;
+    const float forward_x = -right_y * handedness;
+    const float forward_y = right_x * handedness;
+
+    g_dolphin.write_float(camera_xf_addr + 0x00, right_x);
+    g_dolphin.write_float(camera_xf_addr + 0x04, right_y);
+    g_dolphin.write_float(camera_xf_addr + 0x08, 0.0f);
+    g_dolphin.write_float(camera_xf_addr + 0x10, forward_x);
+    g_dolphin.write_float(camera_xf_addr + 0x14, forward_y);
+    g_dolphin.write_float(camera_xf_addr + 0x18, 0.0f);
+    g_dolphin.write_float(camera_xf_addr + 0x20, 0.0f);
+    g_dolphin.write_float(camera_xf_addr + 0x24, 0.0f);
+    g_dolphin.write_float(camera_xf_addr + 0x28, 1.0f);
 }
 
 static float wrap_angle_radians(float angle) {
@@ -1503,7 +1741,17 @@ static void suppress_lock_camera_pitch(uint32_t state_mgr, uint32_t player) {
         g_lock_pitch_unlocked = clamped_pitch;
         g_lock_pitch_have_unlocked = true;
     }
+
+    g_dolphin.write_float(state_mgr + k_final_input_right_stick_y, 0.0f);
+    g_dolphin.write_u8(state_mgr + k_final_input_right_stick_y_press, 0);
+    g_dolphin.write_u8(player + k_player_free_look_state_offset, 0);
+    g_dolphin.write_u8(player + k_player_free_look_state_offset + 1, 0);
+    g_dolphin.write_u8(player + k_player_free_look_state_offset + 2, 0);
+    g_dolphin.write_float(player + k_player_free_look_center_time_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_pitch_angle_offset, 0.0f);
+    g_dolphin.write_float(player + k_player_free_look_pitch_vel_offset, 0.0f);
     g_dolphin.write_float(pitch_addr, g_lock_pitch_unlocked);
+
 }
 
 static bool target_uid_still_exists(uint32_t state_mgr, uint16_t uid, uint32_t expected_obj) {
@@ -1958,10 +2206,19 @@ static bool init_d3d(HWND hwnd) {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     TimerResolutionScope timer_resolution;
     g_settings.load();
+    open_app_hook_log();
+    ensure_dolphin_hook_loaded();
+
+    HICON app_icon = static_cast<HICON>(LoadImageW(
+        hInstance, MAKEINTRESOURCEW(IDI_PRIMEDGUN), IMAGE_ICON,
+        32, 32, LR_DEFAULTCOLOR));
+    HICON app_icon_small = static_cast<HICON>(LoadImageW(
+        hInstance, MAKEINTRESOURCEW(IDI_PRIMEDGUN), IMAGE_ICON,
+        16, 16, LR_DEFAULTCOLOR));
 
     WNDCLASSEXW wc = {
         sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInstance,
-        nullptr, nullptr, nullptr, nullptr, L"PrimedGun", nullptr
+        app_icon, nullptr, nullptr, nullptr, L"PrimedGun", app_icon_small
     };
     RegisterClassExW(&wc);
 
@@ -1969,6 +2226,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         L"PrimedGun", L"PrimedGun",
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
         100, 100, 516, 688, nullptr, nullptr, hInstance, nullptr);
+
+    SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(app_icon));
+    SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(app_icon_small));
 
     if (!init_d3d(g_hwnd)) {
         MessageBoxW(g_hwnd, L"Failed to init D3D11", L"Error", MB_OK);
@@ -1991,6 +2251,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     g_app.dolphin_ok = g_dolphin.connect();
     g_app.dolphin_status = g_dolphin.status();
+    update_game_revision_detection();
     g_app.openvr_ok = g_openvr.init();
     g_app.openvr_status = g_openvr.status();
 
@@ -2010,8 +2271,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_app.active = false;
             g_app.dolphin_ok = false;
             g_dolphin.disconnect();
+            ensure_dolphin_hook_loaded();
             g_app.dolphin_ok = g_dolphin.connect();
             g_app.dolphin_status = g_dolphin.status();
+            update_game_revision_detection();
         }
 
         if (g_app.reconnect_openvr_requested.exchange(false, std::memory_order_relaxed)) {
@@ -2024,6 +2287,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         g_app.dolphin_status = g_dolphin.status();
         g_app.openvr_status = g_openvr.status();
+        static auto last_game_detection = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (last_game_detection.time_since_epoch().count() == 0 ||
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_game_detection).count() >= 500) {
+            update_game_revision_detection();
+            last_game_detection = now;
+        }
 
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();

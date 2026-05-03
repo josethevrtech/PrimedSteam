@@ -48,7 +48,7 @@ For distribution/share, the useful files are:
 See [PrimedGun Setup Guide.pdf](<PrimedGun Setup Guide.pdf>) for screenshot help.
 
 1. Add Dolphin to Steam as a non-Steam game.
-2. In SteamVR video settings for Dolphin, set throttling behavior to `Fixed`, lock application framerate to `60 FPS`, and use about `16.67 ms` additional prediction.
+2. In SteamVR video settings for Dolphin, set throttling behavior to `Fixed`, lock application framerate to `60 FPS`, and use `16.67 ms` additional prediction.
 3. In Dolphin hotkey settings, assign `Reset VR Position` to a controller button so recentering is easy in-game.
 4. In Dolphin controller mapping, right-click the button selection, then `Clear`, then `Add Input`.
 5. In Dolphin VR settings, adjust world scale as shown in the setup guide.
