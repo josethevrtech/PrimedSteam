@@ -10,16 +10,13 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# ── OpenVR ────────────────────────────────────────────────
-set(OPENVR_DIR "C:/openvr" CACHE PATH "Path to OpenVR SDK")
-find_path(OPENVR_INCLUDE_DIR openvr.h HINTS ${OPENVR_DIR}/headers)
-find_library(OPENVR_LIB openvr_api HINTS ${OPENVR_DIR}/lib/win64)
-
-if(NOT OPENVR_INCLUDE_DIR OR NOT OPENVR_LIB)
-    message(FATAL_ERROR "OpenVR not found. Expected C:/openvr (git clone https://github.com/ValveSoftware/openvr C:/openvr)")
+# OpenXR headers
+set(OPENXR_DIR "C:/OpenXR-SDK" CACHE PATH "Path to OpenXR SDK")
+find_path(OPENXR_INCLUDE_DIR openxr/openxr.h HINTS ${OPENXR_DIR}/include)
+if(NOT OPENXR_INCLUDE_DIR)
+    message(FATAL_ERROR "OpenXR SDK headers not found. Expected C:/OpenXR-SDK")
 endif()
-message(STATUS "OpenVR include: ${OPENVR_INCLUDE_DIR}")
-message(STATUS "OpenVR lib:     ${OPENVR_LIB}")
+message(STATUS "OpenXR include: ${OPENXR_INCLUDE_DIR}")
 
 # ── ImGui ─────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -44,7 +41,7 @@ add_executable(PrimedGun WIN32 ${SOURCES})
 target_include_directories(PrimedGun PRIVATE
     src/
     src/hook_common
-    ${OPENVR_INCLUDE_DIR}
+    ${OPENXR_INCLUDE_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
 )
@@ -56,22 +53,24 @@ target_link_libraries(PrimedGun
     dwmapi
     psapi
     winmm
-    ${OPENVR_LIB}
 )
 
 # Dolphin hook sidecar. PrimedGun.exe starts/finds Dolphin, then injects this DLL.
 add_library(PrimedGunHookCommon INTERFACE)
 target_include_directories(PrimedGunHookCommon INTERFACE
     src/hook_common
+    ${OPENXR_INCLUDE_DIR}
 )
 
 add_library(PrimedGun_DolphinHook SHARED
     src/dolphin_hook/dllmain.cpp
+    src/dolphin_hook/DolphinXrBridge.cpp
     src/dolphin_hook/GameTimingHooks.cpp
     src/dolphin_hook/GraphicsHooks.cpp
     src/dolphin_hook/HookRuntime.cpp
     src/dolphin_hook/Ipc.cpp
     src/dolphin_hook/JitHooks.cpp
+    src/dolphin_hook/OpenXrHooks.cpp
     src/dolphin_hook/VulkanHooks.cpp
 )
 target_link_libraries(PrimedGun_DolphinHook PRIVATE PrimedGunHookCommon)
@@ -81,11 +80,12 @@ target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi)
 set_target_properties(PrimedGun_DolphinHook PROPERTIES PREFIX "")
 
 # Copy runtime DLLs next to the built binaries for direct build\bin launches.
-set(OPENVR_DLL "${OPENVR_DIR}/bin/win64/openvr_api.dll")
 set(PRIMEDGUN_RUNTIME_TARGETS
     PrimedGun
     PrimedGun_DolphinHook
 )
+set(D3DCOMPILER_47_DLL "$ENV{SystemRoot}/System32/D3DCompiler_47.dll")
+set(PRIMEDGUN_README "${CMAKE_SOURCE_DIR}/README.md")
 
 foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
     add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
@@ -95,12 +95,21 @@ foreach(RUNTIME_TARGET IN LISTS PRIMEDGUN_RUNTIME_TARGETS)
         COMMENT "Copying PrimedGun assets for ${RUNTIME_TARGET}"
     )
 
-    if(EXISTS "${OPENVR_DLL}")
+    if(EXISTS "${PRIMEDGUN_README}")
         add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${OPENVR_DLL}"
-                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/openvr_api.dll"
-            COMMENT "Copying openvr_api.dll for ${RUNTIME_TARGET}"
+                "${PRIMEDGUN_README}"
+                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/README.md"
+            COMMENT "Copying README.md for ${RUNTIME_TARGET}"
+        )
+    endif()
+
+    if(EXISTS "${D3DCOMPILER_47_DLL}")
+        add_custom_command(TARGET ${RUNTIME_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3DCOMPILER_47_DLL}"
+                "$<TARGET_FILE_DIR:${RUNTIME_TARGET}>/D3DCompiler_47.dll"
+            COMMENT "Copying D3DCompiler_47.dll for ${RUNTIME_TARGET}"
         )
     endif()
 endforeach()

@@ -23,7 +23,7 @@
 
 #include "settings.h"
 #include "dolphin_memory.h"
-#include "openvr_manager.h"
+#include "tracking_math.h"
 #include "gui.h"
 #include "resource.h"
 #include "PrimedGunShared.h"
@@ -42,8 +42,10 @@ static HWND                    g_hwnd = nullptr;
 static Settings       g_settings;
 static AppState       g_app;
 static DolphinMemory  g_dolphin;
-static OpenVRManager  g_openvr;
 static std::wofstream g_hook_log;
+static HANDLE         g_shared_mapping = nullptr;
+static PrimedGun::SharedState* g_shared_state = nullptr;
+static bool g_last_auto_dolphin_xr_controls = false;
 
 static float g_smooth_mat[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
 static float g_smooth_pitch = 0.0f;
@@ -126,6 +128,16 @@ static void app_hook_log(std::wstring_view message) {
     }
 }
 
+static bool app_logging_enabled() {
+    char value[16] = {};
+    const DWORD len = GetEnvironmentVariableA("PRIMEDGUN_ENABLE_LOGS", value, sizeof(value));
+    return len > 0 && len < sizeof(value) && value[0] == '1';
+}
+
+static std::wstring widen_ascii(std::string_view value) {
+    return std::wstring(value.begin(), value.end());
+}
+
 static std::string trim_ascii(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos)
@@ -192,6 +204,9 @@ static bool parse_patch_line(const std::string& raw_line, LoadedPatch& patch) {
 }
 
 static void open_app_hook_log() {
+    if (!app_logging_enabled())
+        return;
+
     std::error_code ec;
     const fs::path log_dir = local_app_data_path() / L"PrimedGun";
     fs::create_directories(log_dir, ec);
@@ -202,6 +217,384 @@ static fs::path exe_directory() {
     wchar_t buffer[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(MAX_PATH));
     return fs::path(buffer).parent_path();
+}
+
+static fs::path user_profile_path() {
+    wchar_t buffer[MAX_PATH] = {};
+    const DWORD len = GetEnvironmentVariableW(L"USERPROFILE", buffer, static_cast<DWORD>(MAX_PATH));
+    if (len == 0 || len >= MAX_PATH)
+        return {};
+    return fs::path(buffer);
+}
+
+static fs::path dolphin_gcpad_profile_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / L"GCPadNew.ini";
+}
+
+static fs::path dolphin_gcpad_backup_path() {
+    const fs::path profile = dolphin_gcpad_profile_path();
+    if (profile.empty())
+        return {};
+    return profile.parent_path() / L"GCPadNew.ini.primedgun-gcpad1.bak";
+}
+
+static fs::path dolphin_hotkeys_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / L"Hotkeys.ini";
+}
+
+static fs::path dolphin_ini_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / L"Dolphin.ini";
+}
+
+static fs::path dolphin_hotkeys_profile_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" / L"Config" /
+        L"Profiles" / L"Hotkeys" / L"hotkeys.ini";
+}
+
+static fs::path primedgun_backup_path_for(const fs::path& path) {
+    if (path.empty())
+        return {};
+    return path.parent_path() / (path.filename().wstring() + L".primedgun.bak");
+}
+
+static fs::path dolphin_gm8e01_vr_settings_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" /
+        L"GameSettingsVR" / L"GM8E01.ini";
+}
+
+static std::vector<std::string> read_text_lines(const fs::path& path) {
+    std::vector<std::string> lines;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        lines.push_back(line);
+    }
+    return lines;
+}
+
+static bool find_ini_section(const std::vector<std::string>& lines, const std::string& section,
+                             size_t& section_begin, size_t& section_end) {
+    const std::string section_header = "[" + section + "]";
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (trim_ascii(lines[i]) != section_header)
+            continue;
+
+        section_begin = i;
+        section_end = lines.size();
+        for (size_t j = i + 1; j < lines.size(); ++j) {
+            const std::string trimmed = trim_ascii(lines[j]);
+            if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
+                section_end = j;
+                break;
+            }
+        }
+        return true;
+    }
+    section_begin = lines.size();
+    section_end = lines.size();
+    return false;
+}
+
+static void write_text_lines_if_changed(const fs::path& path, const std::vector<std::string>& lines) {
+    std::ostringstream serialized;
+    for (const std::string& line : lines)
+        serialized << line << "\n";
+
+    const std::string new_text = serialized.str();
+    std::ifstream existing(path, std::ios::binary);
+    const std::string old_text((std::istreambuf_iterator<char>(existing)),
+                               std::istreambuf_iterator<char>());
+    if (old_text == new_text)
+        return;
+
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << new_text;
+}
+
+static void backup_file_once(const fs::path& path) {
+    const fs::path backup = primedgun_backup_path_for(path);
+    if (path.empty() || backup.empty() || !fs::exists(path) || fs::exists(backup))
+        return;
+
+    std::error_code ec;
+    fs::create_directories(backup.parent_path(), ec);
+    fs::copy_file(path, backup, fs::copy_options::none, ec);
+}
+
+static void restore_file_backup(const fs::path& path) {
+    const fs::path backup = primedgun_backup_path_for(path);
+    if (path.empty() || backup.empty() || !fs::exists(backup))
+        return;
+
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    fs::copy_file(backup, path, fs::copy_options::overwrite_existing, ec);
+    if (!ec)
+        fs::remove(backup, ec);
+}
+
+static void backup_dolphin_gcpad1_controls() {
+    const fs::path profile = dolphin_gcpad_profile_path();
+    const fs::path backup = dolphin_gcpad_backup_path();
+    if (profile.empty() || backup.empty() || fs::exists(backup))
+        return;
+
+    const std::vector<std::string> lines = read_text_lines(profile);
+    size_t begin = 0;
+    size_t end = 0;
+    const bool has_section = find_ini_section(lines, "GCPad1", begin, end);
+
+    std::vector<std::string> backup_lines;
+    backup_lines.push_back("PRIMEDGUN_GCPAD1_BACKUP_V1");
+    backup_lines.push_back(std::string("HadSection=") + (has_section ? "1" : "0"));
+    if (has_section) {
+        backup_lines.insert(backup_lines.end(), lines.begin() + static_cast<std::ptrdiff_t>(begin),
+                            lines.begin() + static_cast<std::ptrdiff_t>(end));
+    }
+    write_text_lines_if_changed(backup, backup_lines);
+}
+
+static void restore_dolphin_gcpad1_controls() {
+    const fs::path profile = dolphin_gcpad_profile_path();
+    const fs::path backup = dolphin_gcpad_backup_path();
+    if (profile.empty() || backup.empty() || !fs::exists(backup))
+        return;
+
+    const std::vector<std::string> backup_lines = read_text_lines(backup);
+    if (backup_lines.size() < 2 || backup_lines[0] != "PRIMEDGUN_GCPAD1_BACKUP_V1")
+        return;
+
+    const bool had_section = trim_ascii(backup_lines[1]) == "HadSection=1";
+    std::vector<std::string> lines = read_text_lines(profile);
+    size_t begin = 0;
+    size_t end = 0;
+    const bool has_current_section = find_ini_section(lines, "GCPad1", begin, end);
+
+    std::vector<std::string> output;
+    if (has_current_section) {
+        output.insert(output.end(), lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(begin));
+        if (had_section) {
+            output.insert(output.end(), backup_lines.begin() + 2, backup_lines.end());
+        }
+        output.insert(output.end(), lines.begin() + static_cast<std::ptrdiff_t>(end), lines.end());
+    } else {
+        output = lines;
+        if (had_section) {
+            if (!output.empty() && !output.back().empty())
+                output.push_back({});
+            output.insert(output.end(), backup_lines.begin() + 2, backup_lines.end());
+        }
+    }
+
+    write_text_lines_if_changed(profile, output);
+    std::error_code ec;
+    fs::remove(backup, ec);
+}
+
+static void apply_ini_section_values(const fs::path& path, const std::string& section,
+                                     const std::vector<std::pair<std::string, std::string>>& values,
+                                     const std::vector<std::string>& remove_keys) {
+    std::vector<std::string> lines = read_text_lines(path);
+
+    const std::string section_header = "[" + section + "]";
+    size_t section_begin = lines.size();
+    size_t section_end = lines.size();
+    find_ini_section(lines, section, section_begin, section_end);
+
+    if (section_begin == lines.size()) {
+        if (!lines.empty() && !lines.back().empty())
+            lines.push_back({});
+        lines.push_back(section_header);
+        section_begin = lines.size() - 1;
+        section_end = lines.size();
+    }
+
+    auto key_from_line = [](const std::string& line) -> std::string {
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            return {};
+        return trim_ascii(line.substr(0, eq));
+    };
+
+    std::vector<bool> used(values.size(), false);
+    std::vector<std::string> output;
+    output.reserve(lines.size() + values.size());
+
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i <= section_begin || i >= section_end) {
+            output.push_back(lines[i]);
+            continue;
+        }
+
+        const std::string key = key_from_line(lines[i]);
+        if (key.empty()) {
+            output.push_back(lines[i]);
+            continue;
+        }
+
+        if (std::find(remove_keys.begin(), remove_keys.end(), key) != remove_keys.end())
+            continue;
+
+        bool replaced = false;
+        for (size_t value_i = 0; value_i < values.size(); ++value_i) {
+            if (values[value_i].first == key) {
+                output.push_back(values[value_i].first + " = " + values[value_i].second);
+                used[value_i] = true;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced)
+            output.push_back(lines[i]);
+    }
+
+    size_t insert_at = output.size();
+    if (section_end != lines.size()) {
+        size_t sections_seen = 0;
+        insert_at = output.size();
+        for (size_t i = 0; i < output.size(); ++i) {
+            if (trim_ascii(output[i]) == section_header) {
+                sections_seen = 1;
+                insert_at = i + 1;
+                continue;
+            }
+            if (sections_seen == 1) {
+                const std::string trimmed = trim_ascii(output[i]);
+                if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
+                    insert_at = i;
+                    break;
+                }
+                insert_at = i + 1;
+            }
+        }
+    }
+
+    std::vector<std::string> additions;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (!used[i])
+            additions.push_back(values[i].first + " = " + values[i].second);
+    }
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(insert_at),
+                  additions.begin(), additions.end());
+
+    write_text_lines_if_changed(path, output);
+}
+
+static void apply_dolphin_xr_gamecube_controls() {
+    restore_dolphin_gcpad1_controls();
+    restore_file_backup(dolphin_ini_path());
+    restore_file_backup(dolphin_hotkeys_path());
+    restore_file_backup(dolphin_hotkeys_profile_path());
+
+    const fs::path profile = dolphin_gcpad_profile_path();
+    if (profile.empty())
+        return;
+
+    backup_dolphin_gcpad1_controls();
+
+    const std::vector<std::pair<std::string, std::string>> values = {
+        {"Device", "OpenXR/0/OpenXR Controller"},
+        {"Buttons/A", "`Right Button A`"},
+        {"Buttons/B", "`Right Button B`"},
+        {"Buttons/X", "`Left Button X`"},
+        {"Buttons/Y", "`Left Button Squeeze`&`Left Squeeze`"},
+        {"Buttons/Z", "`Right Button Squeeze`&`Right Squeeze`"},
+        {"Buttons/Start", "`Left Button Y`"},
+        {"Main Stick/Up", "`Left Thumbstick Y+`"},
+        {"Main Stick/Down", "`Left Thumbstick Y-`"},
+        {"Main Stick/Left", "`Left Thumbstick X-`"},
+        {"Main Stick/Right", "`Left Thumbstick X+`"},
+        {"Main Stick/Dead Zone", "12.00"},
+        {"C-Stick/Up", "`Right Thumbstick Y+`"},
+        {"C-Stick/Down", "`Right Thumbstick Y-`"},
+        {"C-Stick/Left", "`Right Thumbstick X-`"},
+        {"C-Stick/Right", "`Right Thumbstick X+`"},
+        {"C-Stick/Dead Zone", "12.00"},
+        {"Triggers/L", "`Left Trigger`"},
+        {"Triggers/R", "`Right Trigger`"},
+        {"Triggers/L-Analog", "`Left Trigger`"},
+        {"Triggers/R-Analog", "`Right Trigger`"},
+        {"Rumble/Motor", "`Motor Right`"},
+    };
+    const std::vector<std::string> remove_keys = {
+        "Main Stick/Modifier",
+        "C-Stick/Modifier",
+    };
+    apply_ini_section_values(profile, "GCPad1", values, remove_keys);
+
+    const std::vector<std::pair<std::string, std::string>> hotkey_values = {
+        {"Device", "OpenXR/0/OpenXR Controller"},
+        {"VR/Reset VR Position", "`Right Button Thumbstick`"},
+    };
+
+    const fs::path hotkeys = dolphin_hotkeys_path();
+    if (!hotkeys.empty()) {
+        backup_file_once(hotkeys);
+        apply_ini_section_values(hotkeys, "Hotkeys", hotkey_values, {});
+    }
+
+    const fs::path hotkeys_profile = dolphin_hotkeys_profile_path();
+    if (!hotkeys_profile.empty()) {
+        backup_file_once(hotkeys_profile);
+        apply_ini_section_values(hotkeys_profile, "Profile", hotkey_values, {});
+    }
+
+    const fs::path dolphin_ini = dolphin_ini_path();
+    if (!dolphin_ini.empty()) {
+        backup_file_once(dolphin_ini);
+        apply_ini_section_values(dolphin_ini, "General",
+                                 {{"HotkeysRequireFocus", "False"}}, {});
+    }
+}
+
+static void sync_dolphin_xr_gamecube_controls(bool enabled) {
+    if (enabled) {
+        apply_dolphin_xr_gamecube_controls();
+    } else {
+        restore_dolphin_gcpad1_controls();
+        restore_file_backup(dolphin_ini_path());
+        restore_file_backup(dolphin_hotkeys_path());
+        restore_file_backup(dolphin_hotkeys_profile_path());
+    }
+    g_last_auto_dolphin_xr_controls = enabled;
+}
+
+static void restore_dolphin_borrowed_controls() {
+    restore_dolphin_gcpad1_controls();
+    restore_file_backup(dolphin_ini_path());
+    restore_file_backup(dolphin_hotkeys_path());
+    restore_file_backup(dolphin_hotkeys_profile_path());
+    g_last_auto_dolphin_xr_controls = false;
+}
+
+static void apply_dolphin_vr_units_per_meter() {
+    const fs::path path = dolphin_gm8e01_vr_settings_path();
+    if (path.empty())
+        return;
+
+    const std::vector<std::pair<std::string, std::string>> values = {
+        {"UnitsPerMeter", "1.50"},
+    };
+    apply_ini_section_values(path, "Graphics.VR", values, {});
 }
 
 static std::vector<LoadedPatch> load_app_patch_files() {
@@ -381,6 +774,8 @@ static bool inject_hook_dll(DWORD process_id, const fs::path& dll_path) {
     return true;
 }
 
+static bool open_live_shared_state();
+
 static void ensure_shared_state() {
     const std::vector<LoadedPatch> patches = load_app_patch_files();
 
@@ -412,6 +807,165 @@ static void ensure_shared_state() {
     CloseHandle(mapping);
 }
 
+static void verify_app_patches_applied() {
+    if (!g_app.dolphin_ok || !g_app.game_rev0_ok || !g_dolphin.is_connected())
+        return;
+    if (!open_live_shared_state() || !g_shared_state)
+        return;
+    if (g_shared_state->patch.count == 0 || g_shared_state->patch.count > PrimedGun::MaxGamePatches) {
+        ensure_shared_state();
+        return;
+    }
+
+    bool needs_retry = false;
+    uint32_t missing_count = 0;
+    for (uint32_t i = 0; i < g_shared_state->patch.count; ++i) {
+        PrimedGun::GamePatch& patch = g_shared_state->patch.patches[i];
+        if (!patch.enabled || patch.address < 0x80000000)
+            continue;
+
+        const uint32_t current = g_dolphin.read_u32(patch.address);
+        patch.lastSeen = current;
+        if (current == patch.value) {
+            patch.applied = 1;
+            continue;
+        }
+
+        patch.applied = 0;
+        needs_retry = true;
+        ++missing_count;
+    }
+
+    if (needs_retry) {
+        ++g_shared_state->patch.generation;
+        app_hook_log(L"Patch watchdog requested retry for " + std::to_wstring(missing_count) +
+            L" app patch line(s).");
+    }
+}
+
+static bool app_patches_are_applied() {
+    if (!open_live_shared_state() || !g_shared_state)
+        return false;
+    if (g_shared_state->patch.count == 0 || g_shared_state->patch.count > PrimedGun::MaxGamePatches)
+        return false;
+
+    for (uint32_t i = 0; i < g_shared_state->patch.count; ++i) {
+        const PrimedGun::GamePatch& patch = g_shared_state->patch.patches[i];
+        if (patch.enabled && patch.applied == 0)
+            return false;
+    }
+    return true;
+}
+
+static bool open_live_shared_state() {
+    if (g_shared_state)
+        return true;
+
+    g_shared_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                          sizeof(PrimedGun::SharedState),
+                                          PrimedGun::SharedMemoryName);
+    if (!g_shared_mapping)
+        return false;
+
+    g_shared_state = static_cast<PrimedGun::SharedState*>(
+        MapViewOfFile(g_shared_mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(PrimedGun::SharedState)));
+    if (!g_shared_state) {
+        CloseHandle(g_shared_mapping);
+        g_shared_mapping = nullptr;
+        return false;
+    }
+
+    if (g_shared_state->magic != PrimedGun::SharedStateMagic ||
+        g_shared_state->version != PrimedGun::SharedStateVersion) {
+        *g_shared_state = PrimedGun::SharedState{};
+    }
+    return true;
+}
+
+static void close_live_shared_state() {
+    if (g_shared_state) {
+        UnmapViewOfFile(g_shared_state);
+        g_shared_state = nullptr;
+    }
+    if (g_shared_mapping) {
+        CloseHandle(g_shared_mapping);
+        g_shared_mapping = nullptr;
+    }
+}
+
+static Pose pose_from_shared(const PrimedGun::PoseState& in) {
+    Pose out{};
+    out.px = in.positionMeters.x;
+    out.py = in.positionMeters.y;
+    out.pz = in.positionMeters.z;
+    out.qx = in.orientation.x;
+    out.qy = in.orientation.y;
+    out.qz = in.orientation.z;
+    out.qw = in.orientation.w;
+    out.valid = true;
+    return out;
+}
+
+static bool get_dolphinxr_poses(bool right_hand, Pose& controller, Pose& left_controller, Pose& hmd) {
+    controller = {};
+    left_controller = {};
+    hmd = {};
+
+    if (!open_live_shared_state() || !g_shared_state)
+        return false;
+
+    const uint64_t before = g_shared_state->trackingGeneration;
+    if (g_shared_state->trackingSource != 1 || !g_shared_state->trackingRuntimeActive || before == 0)
+        return false;
+
+    const PrimedGun::PoseState shared_left = g_shared_state->leftHandPose;
+    const PrimedGun::PoseState shared_right = g_shared_state->rightHandPose;
+    const PrimedGun::PoseState shared_hmd = g_shared_state->hmdPose;
+    const uint64_t after = g_shared_state->trackingGeneration;
+    if (before != after)
+        return false;
+
+    Pose left = pose_from_shared(shared_left);
+    left.trigger = shared_left.linearVelocityMetersPerSecond.x;
+    left.stick_x = shared_left.linearVelocityMetersPerSecond.y;
+    left.stick_y = shared_left.linearVelocityMetersPerSecond.z;
+    left.axis_x[0] = left.stick_x;
+    left.axis_y[0] = left.stick_y;
+    left.stick_axis = 0;
+
+    Pose right = pose_from_shared(shared_right);
+    right.trigger = shared_right.linearVelocityMetersPerSecond.x;
+    right.stick_x = shared_right.linearVelocityMetersPerSecond.y;
+    right.stick_y = shared_right.linearVelocityMetersPerSecond.z;
+    right.axis_x[0] = right.stick_x;
+    right.axis_y[0] = right.stick_y;
+    right.stick_axis = 0;
+
+    controller = right_hand ? right : left;
+    left_controller = right_hand ? left : right;
+    hmd = pose_from_shared(shared_hmd);
+    return controller.valid || left_controller.valid || hmd.valid;
+}
+
+static bool get_dolphinxr_hmd_pose(Pose& hmd) {
+    hmd = {};
+
+    if (!open_live_shared_state() || !g_shared_state)
+        return false;
+
+    const uint64_t before = g_shared_state->trackingGeneration;
+    if (g_shared_state->trackingSource != 2 || !g_shared_state->trackingRuntimeActive || before == 0)
+        return false;
+
+    const PrimedGun::PoseState shared_hmd = g_shared_state->hmdPose;
+    const uint64_t after = g_shared_state->trackingGeneration;
+    if (before != after)
+        return false;
+
+    hmd = pose_from_shared(shared_hmd);
+    return hmd.valid;
+}
+
 static bool ensure_dolphin_hook_loaded() {
     ensure_shared_state();
 
@@ -427,19 +981,8 @@ static bool ensure_dolphin_hook_loaded() {
         return inject_hook_dll(*dolphin_pid, dll_path);
     }
 
-    const fs::path dolphin_path = L"G:\\Dolphin-OpenXR\\Release\\Dolphin.exe";
-    std::optional<StartedDolphinProcess> started = start_dolphin_suspended(dolphin_path);
-    if (!started) {
-        app_hook_log(L"Could not find or start Dolphin.exe.");
-        return false;
-    }
-
-    const bool injected = inject_hook_dll(started->process_id, dll_path);
-    ResumeThread(started->thread);
-    CloseHandle(started->thread);
-    CloseHandle(started->process);
-    app_hook_log(L"PrimedGun.exe resumed Dolphin.exe main thread.");
-    return injected;
+    app_hook_log(L"Dolphin.exe is not running; waiting for the user to start Dolphin.");
+    return false;
 }
 
 static void push_timing_sample(float* hist, int& head, float ms) {
@@ -548,7 +1091,7 @@ static void clear_u32_range(uint32_t addr, int words) {
 static bool resolve_active_camera_transform_addr(uint32_t& camera_addr);
 static bool read_player_yaw_from_transform2d(uint32_t addr, float& yaw_deg_out);
 static float wrap_angle_radians(float angle);
-static void apply_openvr_world_yaw(Pose& pose, float yaw_deg);
+static void apply_tracking_world_yaw(Pose& pose, float yaw_deg);
 
 static void update_game_revision_detection() {
     if (!g_dolphin.is_connected()) {
@@ -1228,7 +1771,7 @@ static bool offhand_prime_yaw(const Pose& offhand, float yaw_delta_deg, float& y
         return false;
 
     Pose adjusted = offhand;
-    apply_openvr_world_yaw(adjusted, yaw_delta_deg);
+    apply_tracking_world_yaw(adjusted, yaw_delta_deg);
 
     const float qx = adjusted.qx;
     const float qy = adjusted.qy;
@@ -1532,14 +2075,14 @@ static void rotate_prime_matrix_yaw(Matrix3x4& mat, float yaw_deg) {
     }
 }
 
-static void apply_openvr_world_yaw(Pose& pose, float yaw_deg) {
+static void apply_tracking_world_yaw(Pose& pose, float yaw_deg) {
     const float yaw_rad = yaw_deg * (static_cast<float>(M_PI) / 180.0f);
     const float half = yaw_rad * 0.5f;
     const float sy = std::sinf(half);
     const float cy = std::cosf(half);
 
     // Turning the in-game facing direction should rotate the controller's
-    // orientation frame around OpenVR's up axis so pitch/roll operate in the
+    // orientation frame around the tracking up axis so pitch/roll operate in the
     // turned frame too. Do not rotate the absolute tracked position here,
     // because the local gun offset is handled separately and rotating both
     // causes the cannon to orbit twice as far.
@@ -1559,6 +2102,90 @@ static void apply_position_recenter(Pose& pose) {
     pose.px -= g_controller_base_prime_x;
     pose.py -= g_controller_base_prime_y;
     pose.pz -= g_controller_base_prime_z;
+}
+
+static void normalize_quat(Pose& pose) {
+    const float len_sq = pose.qx * pose.qx + pose.qy * pose.qy + pose.qz * pose.qz + pose.qw * pose.qw;
+    if (!std::isfinite(len_sq) || len_sq <= 0.000001f) {
+        pose.qx = 0.0f;
+        pose.qy = 0.0f;
+        pose.qz = 0.0f;
+        pose.qw = 1.0f;
+        return;
+    }
+    const float inv_len = 1.0f / std::sqrt(len_sq);
+    pose.qx *= inv_len;
+    pose.qy *= inv_len;
+    pose.qz *= inv_len;
+    pose.qw *= inv_len;
+}
+
+static Pose smooth_openxr_gun_pose(const Pose& raw) {
+    constexpr float kPositionAlpha = 0.35f;
+    constexpr float kRotationAlpha = 0.40f;
+    constexpr float kRotationDeadbandDegrees = 0.15f;
+    constexpr float kResetDistanceMeters = 0.50f;
+
+    static bool have_smoothed = false;
+    static Pose smoothed = {};
+
+    Pose current = raw;
+    normalize_quat(current);
+    if (!current.valid) {
+        have_smoothed = false;
+        return raw;
+    }
+
+    if (!have_smoothed || !smoothed.valid) {
+        smoothed = current;
+        have_smoothed = true;
+        return smoothed;
+    }
+
+    const float dx = current.px - smoothed.px;
+    const float dy = current.py - smoothed.py;
+    const float dz = current.pz - smoothed.pz;
+    const float dist_sq = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(dist_sq) || dist_sq > kResetDistanceMeters * kResetDistanceMeters) {
+        smoothed = current;
+        return smoothed;
+    }
+
+    smoothed.px += dx * kPositionAlpha;
+    smoothed.py += dy * kPositionAlpha;
+    smoothed.pz += dz * kPositionAlpha;
+
+    float qx = current.qx;
+    float qy = current.qy;
+    float qz = current.qz;
+    float qw = current.qw;
+    float dot = smoothed.qx * qx + smoothed.qy * qy + smoothed.qz * qz + smoothed.qw * qw;
+    if (dot < 0.0f) {
+        dot = -dot;
+        qx = -qx;
+        qy = -qy;
+        qz = -qz;
+        qw = -qw;
+    }
+
+    const float clamped_dot = std::clamp(dot, -1.0f, 1.0f);
+    const float angle_deg = 2.0f * std::acos(clamped_dot) * (180.0f / static_cast<float>(M_PI));
+    if (std::isfinite(angle_deg) && angle_deg >= kRotationDeadbandDegrees) {
+        smoothed.qx += (qx - smoothed.qx) * kRotationAlpha;
+        smoothed.qy += (qy - smoothed.qy) * kRotationAlpha;
+        smoothed.qz += (qz - smoothed.qz) * kRotationAlpha;
+        smoothed.qw += (qw - smoothed.qw) * kRotationAlpha;
+        normalize_quat(smoothed);
+    }
+
+    smoothed.trigger = current.trigger;
+    smoothed.stick_x = current.stick_x;
+    smoothed.stick_y = current.stick_y;
+    smoothed.stick_axis = current.stick_axis;
+    smoothed.axis_x = current.axis_x;
+    smoothed.axis_y = current.axis_y;
+    smoothed.valid = current.valid;
+    return smoothed;
 }
 
 static void write_gun_chain(uint32_t gun_xf, uint32_t beam_xf,
@@ -2097,20 +2724,26 @@ static void tracking_thread() {
         g_app.tracker_dt_ms = dt * 1000.0f;
         if (g_app.tracker_dt_ms > 20.0f) ++g_app.tracker_drop_count;
 
-        if (g_app.openvr_ok) {
-            const auto poll_start = clock::now();
-            Pose pose = {};
-            Pose left_pose = {};
-            Pose hmd_pose = {};
-            g_openvr.get_latest_poses(g_settings.use_right_hand, pose, left_pose, hmd_pose);
-            const auto poll_end = clock::now();
-            g_app.tracker_poll_ms = std::chrono::duration<float, std::milli>(poll_end - poll_start).count();
-            {
-                std::lock_guard<std::mutex> lock(g_pose_mutex);
-                g_latest_pose = pose;
-                g_latest_left_pose = left_pose;
-                g_latest_hmd_pose = hmd_pose;
-            }
+        const auto poll_start = clock::now();
+        Pose pose = {};
+        Pose left_pose = {};
+        Pose hmd_pose = {};
+        bool got_pose = get_dolphinxr_poses(g_settings.use_right_hand, pose, left_pose, hmd_pose);
+        if (got_pose) {
+            g_app.tracking_ok = true;
+            g_app.tracking_status = "DolphinXR OpenXR";
+        } else {
+            g_app.tracking_ok = false;
+            g_app.tracking_status = "Waiting for DolphinXR OpenXR";
+        }
+        const auto poll_end = clock::now();
+        g_app.tracker_poll_ms = std::chrono::duration<float, std::milli>(poll_end - poll_start).count();
+
+        if (got_pose) {
+            std::lock_guard<std::mutex> lock(g_pose_mutex);
+            g_latest_pose = pose;
+            g_latest_left_pose = left_pose;
+            g_latest_hmd_pose = hmd_pose;
             g_app.last_pose = pose;
         }
 
@@ -2221,9 +2854,9 @@ static void writer_thread() {
                 g_app.dbg_directional_move_stick_mag = 0.0f;
                 g_directional_move_speed = 0.0f;
             }
-            Pose adjusted_pose = pose;
-            apply_openvr_world_yaw(adjusted_pose, player_yaw_delta_deg);
-            Matrix3x4 controller_mat_no_offset = OpenVRManager::pose_to_prime_matrix(
+            Pose adjusted_pose = smooth_openxr_gun_pose(pose);
+            apply_tracking_world_yaw(adjusted_pose, player_yaw_delta_deg);
+            Matrix3x4 controller_mat_no_offset = pose_to_prime_matrix(
                 adjusted_pose,
                 0.0f, 0.0f, 0.0f,
                 g_settings.rot_offset_x, g_settings.rot_offset_y, g_settings.rot_offset_z,
@@ -2240,7 +2873,7 @@ static void writer_thread() {
                 g_translation_base_valid = true;
             }
 
-            Matrix3x4 mat = OpenVRManager::pose_to_prime_matrix(
+            Matrix3x4 mat = pose_to_prime_matrix(
                 adjusted_pose,
                 g_settings.offset_x, g_settings.offset_y, g_settings.offset_z,
                 g_settings.rot_offset_x, g_settings.rot_offset_y, g_settings.rot_offset_z,
@@ -2284,7 +2917,11 @@ static void writer_thread() {
 
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    if (msg == WM_CLOSE) {
+        restore_dolphin_borrowed_controls();
+    }
     if (msg == WM_DESTROY) {
+        restore_dolphin_borrowed_controls();
         PostQuitMessage(0);
         return 0;
     }
@@ -2323,6 +2960,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     TimerResolutionScope timer_resolution;
     g_settings.load();
     open_app_hook_log();
+    apply_dolphin_vr_units_per_meter();
+    sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
+    if (find_process_id_by_name(L"Dolphin.exe")) {
+        MessageBoxW(nullptr,
+            L"Dolphin is already running.\n\n"
+            L"For the cleanest startup, close Dolphin, start PrimedGun, then start Dolphin again.",
+            L"Restart Dolphin",
+            MB_OK | MB_ICONWARNING);
+    }
     ensure_dolphin_hook_loaded();
 
     HICON app_icon = static_cast<HICON>(LoadImageW(
@@ -2348,6 +2994,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     if (!init_d3d(g_hwnd)) {
         MessageBoxW(g_hwnd, L"Failed to init D3D11", L"Error", MB_OK);
+        restore_dolphin_borrowed_controls();
         return 1;
     }
 
@@ -2368,8 +3015,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     g_app.dolphin_ok = g_dolphin.connect();
     g_app.dolphin_status = g_dolphin.status();
     update_game_revision_detection();
-    g_app.openvr_ok = g_openvr.init();
-    g_app.openvr_status = g_openvr.status();
+    g_app.tracking_ok = false;
+    g_app.tracking_status = "Waiting for DolphinXR OpenXR";
+    app_hook_log(L"Tracking source is Dolphin-side OpenXR only.");
 
     std::thread tracker(tracking_thread);
     std::thread dpad(dpad_thread);
@@ -2393,28 +3041,72 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             update_game_revision_detection();
         }
 
-        if (g_app.reconnect_openvr_requested.exchange(false, std::memory_order_relaxed)) {
+        if (g_app.remap_dolphin_controls_requested.exchange(false, std::memory_order_relaxed) ||
+            g_settings.auto_dolphin_xr_controls != g_last_auto_dolphin_xr_controls) {
+            sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
+            g_settings.save();
+        }
+
+        static auto last_dolphin_auto_connect = std::chrono::steady_clock::time_point{};
+        static DWORD last_auto_hook_pid = 0;
+        const auto now = std::chrono::steady_clock::now();
+        if (!g_app.dolphin_ok &&
+            (last_dolphin_auto_connect.time_since_epoch().count() == 0 ||
+             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_dolphin_auto_connect).count() >= 1000)) {
+            last_dolphin_auto_connect = now;
+            const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
+            if (dolphin_pid && *dolphin_pid != last_auto_hook_pid) {
+                ensure_dolphin_hook_loaded();
+                last_auto_hook_pid = *dolphin_pid;
+            } else if (!dolphin_pid) {
+                last_auto_hook_pid = 0;
+            }
+            g_app.dolphin_ok = g_dolphin.connect();
+            g_app.dolphin_status = g_dolphin.status();
+            update_game_revision_detection();
+        }
+
+        if (g_app.reconnect_tracking_requested.exchange(false, std::memory_order_relaxed)) {
             g_app.active = false;
-            g_app.openvr_ok = false;
-            g_openvr.shutdown();
-            g_app.openvr_ok = g_openvr.init();
-            g_app.openvr_status = g_openvr.status();
+            g_app.tracking_ok = false;
+            g_app.tracking_status = "Waiting for DolphinXR OpenXR";
+            ensure_dolphin_hook_loaded();
+            app_hook_log(L"Tracking reconnect requested; Dolphin-side OpenXR remains the only tracking source.");
         }
 
         g_app.dolphin_status = g_dolphin.status();
-        g_app.openvr_status = g_openvr.status();
+        if (open_live_shared_state() && g_shared_state && g_shared_state->trackingSource == 1 &&
+            g_shared_state->trackingRuntimeActive && g_shared_state->trackingGeneration != 0) {
+            g_app.tracking_ok = true;
+            g_app.tracking_status = "DolphinXR OpenXR";
+        } else {
+            g_app.tracking_ok = false;
+            g_app.tracking_status = "Waiting for DolphinXR OpenXR";
+        }
         static auto last_game_detection = std::chrono::steady_clock::time_point{};
-        const auto now = std::chrono::steady_clock::now();
         if (last_game_detection.time_since_epoch().count() == 0 ||
             std::chrono::duration_cast<std::chrono::milliseconds>(now - last_game_detection).count() >= 500) {
             update_game_revision_detection();
             last_game_detection = now;
         }
 
+        static auto last_patch_watchdog = std::chrono::steady_clock::time_point{};
+        if (last_patch_watchdog.time_since_epoch().count() == 0 ||
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_patch_watchdog).count() >= 1000) {
+            verify_app_patches_applied();
+            last_patch_watchdog = now;
+        }
+
+        if (!g_app.active && g_app.dolphin_ok && g_app.game_rev0_ok &&
+            g_app.tracking_ok && app_patches_are_applied()) {
+            g_app.active = true;
+            g_app.recenter_requested.store(true, std::memory_order_relaxed);
+        }
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
-        draw_gui(g_settings, g_app, g_dolphin, g_openvr);
+        draw_gui(g_settings, g_app, g_dolphin);
         ImGui::Render();
 
         float clear[4] = {0.1f, 0.1f, 0.12f, 1.0f};
@@ -2430,8 +3122,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     if (writer.joinable()) writer.join();
 
     g_settings.save();
-    g_openvr.shutdown();
+    close_live_shared_state();
     g_dolphin.disconnect();
+    restore_dolphin_borrowed_controls();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();

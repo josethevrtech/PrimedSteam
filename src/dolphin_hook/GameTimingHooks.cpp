@@ -16,6 +16,7 @@
 
 namespace PrimedGun::Hook {
 void Log(std::wstring_view message);
+bool LoggingEnabled();
 }
 
 namespace PrimedGun::Hook::GameTimingHooks {
@@ -180,6 +181,9 @@ fs::path LocalAppDataPath() {
 }
 
 void DumpPlayerOrbitCodeOnce() {
+    if (!LoggingEnabled()) {
+        return;
+    }
     if (g_dumpedPlayerOrbitCode || !g_memBase) {
         return;
     }
@@ -205,6 +209,9 @@ void DumpPlayerOrbitCodeOnce() {
 }
 
 void DumpFirstPersonCameraCodeOnce() {
+    if (!LoggingEnabled()) {
+        return;
+    }
     if (g_dumpedFirstPersonCameraCode || !g_memBase) {
         return;
     }

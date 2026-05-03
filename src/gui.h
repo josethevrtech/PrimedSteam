@@ -2,7 +2,7 @@
 #include "imgui.h"
 #include "settings.h"
 #include "dolphin_memory.h"
-#include "openvr_manager.h"
+#include "tracking_math.h"
 #include <atomic>
 #include <string>
 #include <algorithm>
@@ -10,7 +10,7 @@
 struct AppState {
     bool  active        = false;
     bool  dolphin_ok    = false;
-    bool  openvr_ok     = false;
+    bool  tracking_ok   = false;
     float fps           = 0.0f;
     float tracker_fps   = 0.0f;
     float tracker_dt_ms = 0.0f;
@@ -27,7 +27,7 @@ struct AppState {
     Matrix3x4 last_matrix = {};
     Pose  last_pose     = {};
     std::string dolphin_status;
-    std::string openvr_status;
+    std::string tracking_status;
     bool  game_rev0_ok = false;
     std::string game_status = "Game: not checked";
     uint32_t dbg_state_mgr  = 0;
@@ -71,11 +71,12 @@ struct AppState {
     float    dbg_directional_move_stick_mag = 0.0f;
     std::atomic<bool> recenter_requested = true;
     std::atomic<bool> reconnect_dolphin_requested = false;
-    std::atomic<bool> reconnect_openvr_requested = false;
+    std::atomic<bool> reconnect_tracking_requested = false;
+    std::atomic<bool> remap_dolphin_controls_requested = false;
 };
 
 inline void draw_gui(Settings& s, AppState& app,
-                     DolphinMemory& dolphin, OpenVRManager& openvr)
+                     DolphinMemory& dolphin)
 {
     constexpr float UI_SCALE = 0.9f; // 10% slimmer
 
@@ -88,8 +89,8 @@ inline void draw_gui(Settings& s, AppState& app,
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
 
     ImGui::TextColored(
-        app.openvr_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
-        "OpenVR: %s", app.openvr_status.c_str());
+        app.tracking_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
+        "Tracking: %s", app.tracking_status.c_str());
 
     ImGui::TextColored(
         app.game_rev0_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
@@ -151,8 +152,8 @@ inline void draw_gui(Settings& s, AppState& app,
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Reconnect OpenVR")) {
-            app.reconnect_openvr_requested.store(true, std::memory_order_relaxed);
+        if (ImGui::Button("Reconnect Dolphin Hook")) {
+            app.reconnect_tracking_requested.store(true, std::memory_order_relaxed);
         }
     }
 
@@ -160,6 +161,7 @@ inline void draw_gui(Settings& s, AppState& app,
     if (ImGui::CollapsingHeader("Controller")) {
         if (ImGui::Button("Reset Controller")) {
             s.use_right_hand = kDefaultUseRightHand;
+            s.auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
             s.xr_dpad_enabled = kDefaultXrDpadEnabled;
             s.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
             s.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
@@ -177,6 +179,12 @@ inline void draw_gui(Settings& s, AppState& app,
         ImGui::RadioButton("Right hand", &hand, 0); ImGui::SameLine();
         ImGui::RadioButton("Left hand",  &hand, 1);
         s.use_right_hand = (hand == 0);
+
+        const bool old_auto_dolphin_xr_controls = s.auto_dolphin_xr_controls;
+        ImGui::Checkbox("Temporarily map Dolphin Port 1 to OpenXR", &s.auto_dolphin_xr_controls);
+        if (s.auto_dolphin_xr_controls != old_auto_dolphin_xr_controls) {
+            app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
+        }
 
         ImGui::SeparatorText("Left hand D-pad");
         ImGui::Checkbox("Enable visor gesture input", &s.xr_dpad_enabled);

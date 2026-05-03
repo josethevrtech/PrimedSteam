@@ -17,6 +17,7 @@
 
 namespace PrimedGun::Hook {
 void Log(std::wstring_view message);
+bool LoggingEnabled();
 }
 
 namespace PrimedGun::Hook::JitHooks {
@@ -199,6 +200,9 @@ void LogExecutableRegions(bool force) {
 }
 
 void DumpExecutableRegions(std::wstring_view reason) {
+    if (!LoggingEnabled()) {
+        return;
+    }
     const std::vector<ExecRegion> regions = EnumerateExecutablePrivateRegions();
     const uint64_t stamp = GetTickCount64();
     const DWORD pid = GetCurrentProcessId();

@@ -4,17 +4,18 @@
 #include <algorithm>
 
 inline constexpr bool kDefaultUseRightHand = true;
-inline constexpr float kDefaultOffsetX = -0.075f;
-inline constexpr float kDefaultOffsetY = -1.2f;
-inline constexpr float kDefaultOffsetZ = -1.0f;
+inline constexpr float kDefaultOffsetX = 0.0f;
+inline constexpr float kDefaultOffsetY = 0.0f;
+inline constexpr float kDefaultOffsetZ = -0.93f;
 inline constexpr float kDefaultRotOffsetX = 0.0f;
 inline constexpr float kDefaultRotOffsetY = 0.0f;
 inline constexpr float kDefaultRotOffsetZ = 0.0f;
-inline constexpr float kDefaultWorldScale = 1.58f;
+inline constexpr float kDefaultWorldScale = 1.50f;
 inline constexpr bool kDefaultGunTargetingEnabled = true;
 inline constexpr float kDefaultGunTargetingDistance = 60.0f;
 inline constexpr float kDefaultGunTargetingRadius = 2.5f;
 inline constexpr bool kDefaultXrDpadEnabled = true;
+inline constexpr bool kDefaultAutoDolphinXrControls = true;
 inline constexpr float kDefaultXrDpadHeadRadius = 0.18f;
 inline constexpr float kDefaultXrDpadHeadYBelow = 0.14f;
 inline constexpr float kDefaultXrDpadDeadzone = 0.45f;
@@ -83,6 +84,7 @@ struct Settings {
     bool gun_targeting_enabled = kDefaultGunTargetingEnabled;
     float gun_targeting_distance = kDefaultGunTargetingDistance;
     float gun_targeting_radius = kDefaultGunTargetingRadius;
+    bool auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
     bool xr_dpad_enabled = kDefaultXrDpadEnabled;
     float xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
     float xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
@@ -116,6 +118,7 @@ struct Settings {
         f << "gun_targeting_enabled=" << gun_targeting_enabled << "\n";
         f << "gun_targeting_distance=" << gun_targeting_distance << "\n";
         f << "gun_targeting_radius=" << gun_targeting_radius << "\n";
+        f << "auto_dolphin_xr_controls=" << auto_dolphin_xr_controls << "\n";
         f << "xr_dpad_enabled=" << xr_dpad_enabled << "\n";
         f << "xr_dpad_head_radius=" << xr_dpad_head_radius << "\n";
         f << "xr_dpad_head_y_below=" << xr_dpad_head_y_below << "\n";
@@ -154,6 +157,7 @@ struct Settings {
             else if (key == "gun_targeting_enabled") gun_targeting_enabled = std::stoi(val);
             else if (key == "gun_targeting_distance") gun_targeting_distance = std::stof(val);
             else if (key == "gun_targeting_radius") gun_targeting_radius = std::stof(val);
+            else if (key == "auto_dolphin_xr_controls") auto_dolphin_xr_controls = std::stoi(val);
             else if (key == "xr_dpad_enabled")       xr_dpad_enabled = std::stoi(val);
             else if (key == "xr_dpad_head_radius")   xr_dpad_head_radius = std::stof(val);
             else if (key == "xr_dpad_head_y_below")  xr_dpad_head_y_below = std::stof(val);

@@ -2,8 +2,10 @@
 
 #include "GraphicsHooks.h"
 #include "GameTimingHooks.h"
+#include "DolphinXrBridge.h"
 #include "Ipc.h"
 #include "JitHooks.h"
+#include "OpenXrHooks.h"
 
 #include <windows.h>
 
@@ -24,6 +26,7 @@ namespace {
 std::atomic<bool> g_running = false;
 HANDLE g_thread = nullptr;
 std::wofstream g_log;
+bool g_logging_enabled = false;
 
 fs::path LocalAppDataPath() {
     wchar_t buffer[MAX_PATH] = {};
@@ -44,6 +47,7 @@ DWORD WINAPI RuntimeThread(void*) {
     GameTimingHooks::Install();
     GraphicsHooks::Install();
     JitHooks::Install();
+    OpenXrHooks::InstallIfAvailable(shared.Get());
     Log(L"PrimedGun hook runtime is active inside Dolphin.");
 
     uint64_t lastMaintenanceTick = 0;
@@ -56,6 +60,7 @@ DWORD WINAPI RuntimeThread(void*) {
             shared.Heartbeat();
             GameTimingHooks::Poll(shared.Get());
             GraphicsHooks::PollBackendModules();
+            OpenXrHooks::Poll(shared.Get());
             JitHooks::Poll();
 
             if (SharedState* state = shared.Get()) {
@@ -67,6 +72,7 @@ DWORD WINAPI RuntimeThread(void*) {
     }
 
     GraphicsHooks::Shutdown();
+    OpenXrHooks::Shutdown();
     GameTimingHooks::Shutdown();
     JitHooks::Shutdown();
     Log(L"PrimedGun hook runtime stopped.");
@@ -75,8 +81,12 @@ DWORD WINAPI RuntimeThread(void*) {
 
 } // namespace
 
+bool LoggingEnabled() {
+    return g_logging_enabled;
+}
+
 void Log(std::wstring_view message) {
-    if (g_log.is_open()) {
+    if (g_logging_enabled && g_log.is_open()) {
         g_log << message << L"\n";
         g_log.flush();
     }
@@ -87,10 +97,16 @@ bool StartRuntime(HMODULE) {
         return true;
     }
 
-    const fs::path logDir = LocalAppDataPath() / L"PrimedGun";
-    std::error_code ec;
-    fs::create_directories(logDir, ec);
-    g_log.open(logDir / L"PrimedGun_DolphinHook.log", std::ios::app);
+    wchar_t log_value[16] = {};
+    const DWORD log_len = GetEnvironmentVariableW(L"PRIMEDGUN_ENABLE_LOGS", log_value,
+                                                  static_cast<DWORD>(std::size(log_value)));
+    g_logging_enabled = log_len > 0 && log_len < std::size(log_value) && log_value[0] == L'1';
+    if (g_logging_enabled) {
+        const fs::path logDir = LocalAppDataPath() / L"PrimedGun";
+        std::error_code ec;
+        fs::create_directories(logDir, ec);
+        g_log.open(logDir / L"PrimedGun_DolphinHook.log", std::ios::app);
+    }
     Log(L"PrimedGun_DolphinHook loaded.");
 
     g_thread = CreateThread(nullptr, 0, RuntimeThread, nullptr, 0, nullptr);

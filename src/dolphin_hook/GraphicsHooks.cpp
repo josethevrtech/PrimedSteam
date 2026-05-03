@@ -20,13 +20,12 @@ struct BackendModule {
     bool seen = false;
 };
 
-std::array<BackendModule, 6> g_backends{{
+std::array<BackendModule, 5> g_backends{{
     {L"vulkan-1.dll", L"Vulkan loader"},
     {L"d3d11.dll", L"D3D11"},
     {L"d3d12.dll", L"D3D12"},
     {L"dxgi.dll", L"DXGI"},
     {L"openxr_loader.dll", L"OpenXR loader"},
-    {L"openvr_api.dll", L"OpenVR"},
 }};
 
 } // namespace
