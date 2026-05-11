@@ -6,7 +6,7 @@
 inline constexpr bool kDefaultUseRightHand = true;
 inline constexpr float kDefaultOffsetX = 0.0f;
 inline constexpr float kDefaultOffsetY = 0.0f;
-inline constexpr float kDefaultOffsetZ = -0.93f;
+inline constexpr float kDefaultOffsetZ = 0.0f;
 inline constexpr float kDefaultRotOffsetX = 0.0f;
 inline constexpr float kDefaultRotOffsetY = 0.0f;
 inline constexpr float kDefaultRotOffsetZ = 0.0f;

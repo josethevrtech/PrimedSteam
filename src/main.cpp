@@ -255,6 +255,13 @@ static fs::path dolphin_ini_path() {
     return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / L"Dolphin.ini";
 }
 
+static fs::path dolphin_gfx_ini_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / L"GFX.ini";
+}
+
 static fs::path dolphin_hotkeys_profile_path() {
     const fs::path profile = user_profile_path();
     if (profile.empty())
@@ -600,6 +607,16 @@ static void apply_dolphin_vr_units_per_meter() {
         {"UnitsPerMetre", "1.50"},
     };
     apply_ini_section_values(path, "VR", legacy_values, {});
+}
+
+static void apply_dolphin_xr_camera_forward_zero() {
+    const fs::path path = dolphin_gfx_ini_path();
+    if (path.empty())
+        return;
+
+    backup_file_once(path);
+    apply_ini_section_values(path, "VR", {{"CameraForward", "0."}}, {});
+    app_hook_log(L"Applied Dolphin XR CameraForward = 0.");
 }
 
 static std::vector<LoadedPatch> load_app_patch_files() {
@@ -2094,6 +2111,23 @@ static void rotate_prime_translation_xy(Matrix3x4& mat, float yaw_deg) {
     mat.at(1, 3) = s * x + c * y;
 }
 
+static void rotate_prime_xy(float& x, float& y, float yaw_deg) {
+    const float yaw_rad = yaw_deg * (static_cast<float>(M_PI) / 180.0f);
+    const float c = std::cos(yaw_rad);
+    const float s = std::sin(yaw_rad);
+    const float old_x = x;
+    const float old_y = y;
+    x = c * old_x - s * old_y;
+    y = s * old_x + c * old_y;
+}
+
+static void player_relative_cannon_offset(float yaw_delta_deg, float& x, float& y, float& z) {
+    x = g_settings.offset_x * g_settings.world_scale;
+    y = -(g_settings.offset_z * g_settings.world_scale);
+    z = g_settings.offset_y * g_settings.world_scale;
+    rotate_prime_xy(x, y, yaw_delta_deg);
+}
+
 static void rotate_prime_matrix_yaw(Matrix3x4& mat, float yaw_deg) {
     const float yaw_rad = yaw_deg * (static_cast<float>(M_PI) / 180.0f);
     const float c = std::cos(yaw_rad);
@@ -2859,6 +2893,7 @@ static void writer_thread() {
         if (!g_app.active || !g_app.dolphin_ok) {
             g_last_written_basis_valid = false;
             g_last_desired_basis_valid = false;
+            g_translation_base_valid = false;
             if (!inactive_disarmed) {
                 disarm_memory_writes();
                 inactive_disarmed = true;
@@ -2906,14 +2941,23 @@ static void writer_thread() {
 
             Matrix3x4 mat = pose_to_prime_matrix(
                 adjusted_pose,
-                g_settings.offset_x, g_settings.offset_y, g_settings.offset_z,
+                0.0f, 0.0f, 0.0f,
                 g_settings.rot_offset_x, g_settings.rot_offset_y, g_settings.rot_offset_z,
                 g_settings.world_scale
             );
             if (g_translation_base_valid) {
-                mat.at(0, 3) = g_camera_base_prime_x + (controller_mat_no_offset.at(0, 3) - g_controller_base_prime_x) + (g_settings.offset_x * g_settings.world_scale);
-                mat.at(1, 3) = g_camera_base_prime_y + (controller_mat_no_offset.at(1, 3) - g_controller_base_prime_y) - (g_settings.offset_z * g_settings.world_scale);
-                mat.at(2, 3) = g_camera_base_prime_z + (controller_mat_no_offset.at(2, 3) - g_controller_base_prime_z) + (g_settings.offset_y * g_settings.world_scale);
+                float offset_x = 0.0f;
+                float offset_y = 0.0f;
+                float offset_z = 0.0f;
+                player_relative_cannon_offset(player_yaw_delta_deg, offset_x, offset_y, offset_z);
+
+                float controller_delta_x = controller_mat_no_offset.at(0, 3) - g_controller_base_prime_x;
+                float controller_delta_y = controller_mat_no_offset.at(1, 3) - g_controller_base_prime_y;
+                const float controller_delta_z = controller_mat_no_offset.at(2, 3) - g_controller_base_prime_z;
+
+                mat.at(0, 3) = g_camera_base_prime_x + controller_delta_x + offset_x;
+                mat.at(1, 3) = g_camera_base_prime_y + controller_delta_y + offset_y;
+                mat.at(2, 3) = g_camera_base_prime_z + controller_delta_z + offset_z;
             }
             g_app.last_matrix = mat;
 
@@ -2992,6 +3036,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     g_settings.load();
     open_app_hook_log();
     apply_dolphin_vr_units_per_meter();
+    apply_dolphin_xr_camera_forward_zero();
     sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
     if (find_process_id_by_name(L"Dolphin.exe")) {
         MessageBoxW(nullptr,
