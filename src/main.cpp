@@ -946,6 +946,9 @@ $Unnamed Shader 25
 $Unnamed Shader 26
 $Unnamed Shader 27
 $Unnamed Shader 28
+$Unnamed Shader 29
+$Unnamed Shader 30
+$Unnamed Shader 31
 [ShaderOverride]
 $Unnamed Shader 1
 Hash=000000000f312e21
@@ -1190,6 +1193,32 @@ texture_mode=include
 texture=b0f5bd8d58ca0c28
 texture=c30411f60672bd23
 texture=e8f3888a8db51c51
+
+$Unnamed Shader 29
+Hash=0000000017f46bd8
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=45b8821df889a47d
+texture=6213dc7b4cea2067
+texture=a63ebdc372c2c2b0
+texture=e433bfd213466a50
+texture=f6f85f3048de0489
+
+$Unnamed Shader 30
+Hash=00000000076435a1
+Type=PS
+match_mode=exact_hash
+handling=headlocked
+texture_mode=include
+texture=c2f7a381aa992132
+
+$Unnamed Shader 31
+Hash=00000000c06e6c69
+Type=PS
+match_mode=exact_hash
+handling=headlocked
 )ini";
 }
 
@@ -2257,7 +2286,7 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
     static auto s_last_near_head = std::chrono::steady_clock::time_point{};
     static XrDpadDir s_latched_dir = XrDpadNone;
     static auto s_latch_until = std::chrono::steady_clock::time_point{};
-    static bool s_c_stick_suppressed = false;
+    static auto s_last_c_stick_suppress = std::chrono::steady_clock::time_point{};
     g_app.dbg_xr_dpad_active = false;
     g_app.dbg_xr_dpad_dir = XrDpadNone;
     float stick_x = 0.0f;
@@ -2280,7 +2309,7 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
         s_last_near_head = {};
         s_latched_dir = XrDpadNone;
         s_latch_until = {};
-        s_c_stick_suppressed = false;
+        s_last_c_stick_suppress = {};
         return false;
     }
 
@@ -2293,7 +2322,7 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
         s_last_near_head = {};
         s_latched_dir = XrDpadNone;
         s_latch_until = {};
-        s_c_stick_suppressed = false;
+        s_last_c_stick_suppress = {};
         return false;
     }
 
@@ -2313,15 +2342,18 @@ static bool apply_xr_dpad_input(const Pose& left, const Pose& hmd) {
             s_last_press_pulse = {};
             s_latched_dir = XrDpadNone;
             s_latch_until = {};
-            s_c_stick_suppressed = false;
+            s_last_c_stick_suppress = {};
             return false;
         }
         in_head_zone = true;
     }
     set_player_input_disabled_for_dpad(state_mgr, in_head_zone);
-    if (!s_c_stick_suppressed) {
+    const bool refresh_c_stick_suppress =
+        s_last_c_stick_suppress.time_since_epoch().count() == 0 ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_c_stick_suppress).count() >= 16;
+    if (refresh_c_stick_suppress) {
         suppress_c_stick_for_dpad(state_mgr);
-        s_c_stick_suppressed = true;
+        s_last_c_stick_suppress = now;
     }
     const float dpad_deadzone = std::min(g_settings.xr_dpad_deadzone, 0.25f);
     const XrDpadDir raw_dir = get_stick_dpad_direction_with_hysteresis(
@@ -3615,6 +3647,15 @@ static void write_scan_pitch_from_matrix(uint32_t player, const float* mat) {
     g_dolphin.write_float(player + addrs.pitch_offset, g_smooth_pitch);
 }
 
+static void reset_scan_pitch_after_visor_exit(uint32_t player) {
+    if (player < 0x80000000)
+        return;
+
+    const auto addrs = get_addresses();
+    g_smooth_pitch = 0.0f;
+    g_dolphin.write_float(player + addrs.pitch_offset, 0.0f);
+}
+
 static void reset_lock_camera_pitch_suppression() {
     g_lock_pitch_have_unlocked = false;
     g_lock_pitch_unlocked = 0.0f;
@@ -3965,7 +4006,28 @@ static void write_scan_pitch_from_controller_matrix(const Matrix3x4& mat) {
     if (player < 0x80000000)
         return;
 
-    write_scan_pitch_from_matrix(player, mat.m);
+    static uint32_t last_player = 0;
+    static bool was_scan_visor_active = false;
+    static uint32_t normal_frames_after_scan = 0;
+    const bool scan_active = scan_visor_active(player);
+    if (player != last_player) {
+        last_player = player;
+        was_scan_visor_active = scan_active;
+        normal_frames_after_scan = 0;
+    }
+
+    if (scan_active) {
+        normal_frames_after_scan = 0;
+        write_scan_pitch_from_matrix(player, mat.m);
+    } else if (was_scan_visor_active) {
+        normal_frames_after_scan = 1;
+    } else if (normal_frames_after_scan > 0 && normal_frames_after_scan < 8) {
+        ++normal_frames_after_scan;
+    } else if (normal_frames_after_scan == 8) {
+        reset_scan_pitch_after_visor_exit(player);
+        ++normal_frames_after_scan;
+    }
+    was_scan_visor_active = scan_active;
 }
 
 static void writer_thread() {
@@ -4034,9 +4096,11 @@ static void writer_thread() {
             );
             const Pose& right_controller = g_settings.use_right_hand ? pose : left_pose;
             static bool last_right_thumbstick_click = false;
+            const bool left_hand_in_visor_zone =
+                left_controller_is_near_head_for_dpad(left_pose, hmd_pose);
             const bool right_thumbstick_click =
                 g_app.active && g_app.dolphin_ok && right_controller.valid && hmd_pose.valid &&
-                right_controller.thumbstick_click;
+                right_controller.thumbstick_click && !left_hand_in_visor_zone;
             if (right_thumbstick_click && !last_right_thumbstick_click) {
                 calibrate_view_height_from_hmd(hmd_pose.py);
                 g_controller_base_prime_z = hmd_pose.py * g_settings.world_scale;
@@ -4297,10 +4361,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             static auto last_vr_menu_toggle_time = std::chrono::steady_clock::time_point{};
             Pose vr_left_pose = {};
             Pose vr_right_pose = {};
+            Pose vr_hmd_pose = {};
             {
                 std::lock_guard<std::mutex> lock(g_pose_mutex);
                 vr_left_pose = g_latest_left_pose;
                 vr_right_pose = g_settings.use_right_hand ? g_latest_pose : g_latest_left_pose;
+                vr_hmd_pose = g_latest_hmd_pose;
             }
             if (g_shared_state->trackingRuntimeActive) {
                 vr_left_pose = pose_from_shared(g_shared_state->leftHandPose);
@@ -4311,6 +4377,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 vr_right_pose.trigger = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.x;
                 vr_right_pose.stick_x = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.y;
                 vr_right_pose.stick_y = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.z;
+                vr_hmd_pose = pose_from_shared(g_shared_state->hmdPose);
             }
             const bool left_thumb_click = vr_left_pose.valid && vr_left_pose.thumbstick_click;
             static bool last_logged_left_thumb_click = false;
@@ -4468,7 +4535,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 alignment_prompt_show_until = now + std::chrono::seconds(10);
                 app_hook_log(L"Prompt gate: alignment prompt consumed for this game session.");
             }
-            const bool prompt_right_thumb_click = vr_right_pose.valid && vr_right_pose.thumbstick_click;
+            const bool prompt_left_in_visor_zone =
+                left_controller_is_near_head_for_dpad(vr_left_pose, vr_hmd_pose);
+            const bool prompt_right_thumb_click =
+                vr_right_pose.valid && vr_right_pose.thumbstick_click && !prompt_left_in_visor_zone;
             if (show_alignment_prompt && prompt_right_thumb_click && !last_prompt_right_thumb_click) {
                 show_alignment_prompt = false;
                 alignment_prompt_shown_this_launch = true;

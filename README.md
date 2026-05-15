@@ -1,6 +1,6 @@
 # PrimedGun
 
-PrimedGun is a Dolphin OpenXR-side VR enhancement app for Metroid Prime running in Dolphin. It reads OpenXR tracking through a Dolphin hook, writes the arm cannon and input state into game memory, and applies the small set of game patches PrimedGun needs while the game is loaded.
+PrimedGun is a Dolphin OpenXR-side VR enhancement app for Metroid Prime.
 
 ## Requirements
 
@@ -53,7 +53,6 @@ PrimedGun configures the Dolphin pieces it needs at startup where possible:
 - Sets the GM8E01 Dolphin XR camera forward offset to `0`.
 - Sets the GM8E01 Dolphin XR world scale / units-per-meter value used by PrimedGun.
 - Can map Dolphin's Port 1 controls and reset-view hotkey to OpenXR when the setting is enabled.
-- Disables unmanaged Dolphin Action Replay and Gecko enabled-code lists so old user codes do not fight PrimedGun.
 
 PrimedGun writes its Dolphin defaults into the GM8E01 profile files it can find:
 
@@ -80,17 +79,12 @@ These patches are owned by PrimedGun and are applied through the hook, not throu
 3. PrimedGun detects the game when GM8E01 is loaded into memory.
 4. Click the right stick to set height.
 
-The alignment prompt can show again after the game is unloaded from memory and loaded again. Dolphin itself does not need to be closed.
-
 ## VR Settings Menu
 
 - Click the left thumbstick to open or close the in-headset settings menu.
 - The menu is attached to the left controller.
-- Aim with the right-controller laser.
-- Use right trigger or A to change the pointed-at setting.
+- Use A to change the pointed-at setting.
 - Use `Save Settings` to write `primedgun_settings.ini`.
-- Use `Reset All Settings` to restore PrimedGun defaults.
-- Each settings tab also has its own reset row.
 
 ## Notes
 
@@ -105,3 +99,4 @@ For further enhancements to your VR experience, join the Dolphin VR Discord.
 - By Nobbie
 
 Thank you to the Metroid Prime modding community for the resources and research that helped make this possible.
+Huge thank you to iChris4 for Dolphin ReduX development.
