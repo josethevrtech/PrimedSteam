@@ -7,8 +7,9 @@ namespace PrimedGun {
 inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
 inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
 inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
-inline constexpr uint32_t SharedStateVersion = 11;
+inline constexpr uint32_t SharedStateVersion = 13;
 inline constexpr uint32_t MaxGamePatches = 128;
+inline constexpr uint32_t MaxSharedPathChars = 260;
 inline constexpr uint32_t HookStatusDllAlive = 1u << 0;
 inline constexpr uint32_t HookStatusOpenXrInstalled = 1u << 1;
 inline constexpr uint32_t HookStatusOpenXrRuntimeInstalled = 1u << 2;
@@ -119,6 +120,13 @@ struct SharedState {
     uint32_t trackingRuntimeActive = 0;
     uint32_t hookStatusFlags = 0;
     uint32_t openxrModuleFlags = 0;
+    uint32_t inputBindingRequestGeneration = 0;
+    uint32_t inputBindingAppliedGeneration = 0;
+    uint32_t inputBindingStatus = 0;
+    uint32_t dolphinConfigPathGeneration = 0;
+    wchar_t dolphinConfigRoot[MaxSharedPathChars] = {};
+    wchar_t dolphinGameSettingsRoot[MaxSharedPathChars] = {};
+    wchar_t dolphinGameSettingsVrRoot[MaxSharedPathChars] = {};
     uint64_t openxrInstallAttempts = 0;
     PoseState hmdPose{};
     PoseState leftHandPose{};

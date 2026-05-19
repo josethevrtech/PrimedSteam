@@ -95,7 +95,7 @@ add_library(PrimedGun_DolphinHook SHARED
 target_link_libraries(PrimedGun_DolphinHook PRIVATE PrimedGunHookCommon)
 target_compile_features(PrimedGun_DolphinHook PRIVATE cxx_std_20)
 target_compile_definitions(PrimedGun_DolphinHook PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PRIMEDGUN_DOLPHINHOOK_EXPORTS)
-target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi d3d11)
+target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi d3d11 dbghelp)
 set_target_properties(PrimedGun_DolphinHook PROPERTIES PREFIX "")
 
 # Copy runtime DLLs next to the built binaries for direct build\bin launches.

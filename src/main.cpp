@@ -54,6 +54,7 @@ static bool g_last_auto_dolphin_xr_controls = false;
 
 static std::optional<DWORD> find_process_id_by_name(const wchar_t* exe_name);
 static std::optional<fs::path> dolphin_process_path(DWORD process_id);
+static bool open_live_shared_state();
 
 static constexpr uint32_t kButtonTriggerClick = 1u << 0;
 static constexpr uint32_t kButtonThumbstickClick = 1u << 1;
@@ -389,7 +390,37 @@ static fs::path documents_dolphin_config_path(const fs::path& relative_path) {
     return profile / L"Documents" / L"Dolphin Emulator" / L"Config" / relative_path;
 }
 
-static fs::path active_dolphin_config_path(const fs::path& relative_path) {
+static fs::path shared_dolphin_root_path(const wchar_t* path_text) {
+    if (!path_text || !*path_text)
+        return {};
+    return fs::path(path_text);
+}
+
+static fs::path hook_observed_dolphin_config_path(const fs::path& relative_path) {
+    if (!open_live_shared_state() || !g_shared_state)
+        return {};
+    const fs::path root = shared_dolphin_root_path(g_shared_state->dolphinConfigRoot);
+    if (root.empty())
+        return {};
+    return root / L"Config" / relative_path;
+}
+
+static fs::path hook_observed_dolphin_game_settings_path(const wchar_t* folder_name) {
+    if (!open_live_shared_state() || !g_shared_state)
+        return {};
+    fs::path root = shared_dolphin_root_path(g_shared_state->dolphinConfigRoot);
+    if (root.empty()) {
+        const wchar_t* root_text = _wcsicmp(folder_name, L"GameSettingsVR") == 0
+                                       ? g_shared_state->dolphinGameSettingsVrRoot
+                                       : g_shared_state->dolphinGameSettingsRoot;
+        root = shared_dolphin_root_path(root_text);
+    }
+    if (root.empty())
+        return {};
+    return root / folder_name / L"GM8E01.ini";
+}
+
+static std::vector<fs::path> dolphin_config_path_candidates(const fs::path& relative_path) {
     std::vector<fs::path> candidates;
     auto add_candidate = [&](const fs::path& path) {
         if (path.empty())
@@ -401,6 +432,8 @@ static fs::path active_dolphin_config_path(const fs::path& relative_path) {
         }
         candidates.push_back(path);
     };
+
+    add_candidate(hook_observed_dolphin_config_path(relative_path));
 
     const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
     if (dolphin_pid) {
@@ -422,6 +455,12 @@ static fs::path active_dolphin_config_path(const fs::path& relative_path) {
 
     const fs::path documents_path = documents_dolphin_config_path(relative_path);
     add_candidate(documents_path);
+    return candidates;
+}
+
+static fs::path active_dolphin_config_path(const fs::path& relative_path) {
+    const std::vector<fs::path> candidates = dolphin_config_path_candidates(relative_path);
+    const fs::path documents_path = documents_dolphin_config_path(relative_path);
 
     for (const fs::path& path : candidates) {
         if (_wcsicmp(path.wstring().c_str(), documents_path.wstring().c_str()) == 0)
@@ -446,12 +485,40 @@ static fs::path active_dolphin_config_path(const fs::path& relative_path) {
     return documents_path;
 }
 
+static std::vector<fs::path> active_dolphin_config_paths(const fs::path& relative_path,
+                                                         bool include_fallback) {
+    const std::vector<fs::path> candidates = dolphin_config_path_candidates(relative_path);
+    std::vector<fs::path> paths;
+
+    for (const fs::path& path : candidates) {
+        std::error_code ec;
+        if (fs::exists(path, ec)) {
+            paths.push_back(path);
+        }
+    }
+
+    if (paths.empty() && include_fallback) {
+        const fs::path fallback = active_dolphin_config_path(relative_path);
+        if (!fallback.empty()) {
+            paths.push_back(fallback);
+        }
+    }
+
+    return paths;
+}
+
 static fs::path dolphin_gcpad_profile_path() {
     return active_dolphin_config_path(L"GCPadNew.ini");
 }
 
 static fs::path dolphin_gcpad_backup_path() {
     const fs::path profile = dolphin_gcpad_profile_path();
+    if (profile.empty())
+        return {};
+    return profile.parent_path() / L"GCPadNew.ini.primedgun-gcpad1.bak";
+}
+
+static fs::path dolphin_gcpad_backup_path_for(const fs::path& profile) {
     if (profile.empty())
         return {};
     return profile.parent_path() / L"GCPadNew.ini.primedgun-gcpad1.bak";
@@ -665,9 +732,8 @@ static void restore_file_backup(const fs::path& path) {
         fs::remove(backup, ec);
 }
 
-static void backup_dolphin_gcpad1_controls() {
-    const fs::path profile = dolphin_gcpad_profile_path();
-    const fs::path backup = dolphin_gcpad_backup_path();
+static void backup_dolphin_gcpad1_controls_for(const fs::path& profile) {
+    const fs::path backup = dolphin_gcpad_backup_path_for(profile);
     if (profile.empty() || backup.empty() || fs::exists(backup))
         return;
 
@@ -686,9 +752,12 @@ static void backup_dolphin_gcpad1_controls() {
     write_text_lines_if_changed(backup, backup_lines);
 }
 
-static void restore_dolphin_gcpad1_controls() {
-    const fs::path profile = dolphin_gcpad_profile_path();
-    const fs::path backup = dolphin_gcpad_backup_path();
+static void backup_dolphin_gcpad1_controls() {
+    backup_dolphin_gcpad1_controls_for(dolphin_gcpad_profile_path());
+}
+
+static void restore_dolphin_gcpad1_controls_for(const fs::path& profile) {
+    const fs::path backup = dolphin_gcpad_backup_path_for(profile);
     if (profile.empty() || backup.empty() || !fs::exists(backup))
         return;
 
@@ -721,6 +790,11 @@ static void restore_dolphin_gcpad1_controls() {
     write_text_lines_if_changed(profile, output);
     std::error_code ec;
     fs::remove(backup, ec);
+}
+
+static void restore_dolphin_gcpad1_controls() {
+    for (const fs::path& profile : active_dolphin_config_paths(L"GCPadNew.ini", true))
+        restore_dolphin_gcpad1_controls_for(profile);
 }
 
 static void apply_ini_section_values(const fs::path& path, const std::string& section,
@@ -846,119 +920,38 @@ static void disable_ini_section_entries(const fs::path& path, const std::string&
     write_text_lines_if_changed(path, output);
 }
 
-static void apply_dolphin_xr_gamecube_controls() {
-    restore_dolphin_gcpad1_controls();
-    restore_file_backup(dolphin_ini_path());
-    restore_file_backup(dolphin_hotkeys_path());
-    restore_file_backup(dolphin_hotkeys_profile_path());
-
-    const fs::path profile = dolphin_gcpad_profile_path();
-    if (profile.empty())
+static void request_dolphin_openxr_controller_bindings() {
+    if (!open_live_shared_state() || !g_shared_state)
         return;
 
-    backup_dolphin_gcpad1_controls();
+    ++g_shared_state->inputBindingRequestGeneration;
+    g_shared_state->inputBindingStatus = 0;
+    app_hook_log(L"Requested Dolphin-side PrimedGun OpenXR bindings and GM8E01 defaults.");
+}
 
-    const std::vector<std::pair<std::string, std::string>> values = {
-        {"Device", "OpenXR/0/OpenXR Controller"},
-        {"Buttons/A", "`Right Button A`"},
-        {"Buttons/B", "`Right Button B`"},
-        {"Buttons/X", "`Left Button X`"},
-        {"Buttons/Y", "`Right Button Squeeze`&`Right Squeeze`"},
-        {"Buttons/Z", "`Left Button Squeeze`&`Left Squeeze`"},
-        {"Buttons/Start", "`Left Button Y`"},
-        {"Main Stick/Up", "`Left Thumbstick Y+`"},
-        {"Main Stick/Down", "`Left Thumbstick Y-`"},
-        {"Main Stick/Left", "`Left Thumbstick X-`"},
-        {"Main Stick/Right", "`Left Thumbstick X+`"},
-        {"Main Stick/Dead Zone", "12.00"},
-        {"C-Stick/Up", "`Right Thumbstick Y+`"},
-        {"C-Stick/Down", "`Right Thumbstick Y-`"},
-        {"C-Stick/Left", "`Right Thumbstick X-`"},
-        {"C-Stick/Right", "`Right Thumbstick X+`"},
-        {"C-Stick/Dead Zone", "12.00"},
-        {"Triggers/L", "`Left Trigger`"},
-        {"Triggers/R", "`Right Trigger`"},
-        {"Triggers/L-Analog", "`Left Trigger`"},
-        {"Triggers/R-Analog", "`Right Trigger`"},
-        {"Rumble/Motor", "`Motor Right`"},
-    };
-    const std::vector<std::string> remove_keys = {
-        "Main Stick/Modifier",
-        "C-Stick/Modifier",
-    };
-    apply_ini_section_values(profile, "GCPad1", values, remove_keys);
-
-    const std::vector<std::pair<std::string, std::string>> hotkey_values = {
-        {"Device", "OpenXR/0/OpenXR Controller"},
-        {"VR/Reset VR Position", "`Right Button Thumbstick`"},
-    };
-
-    const fs::path hotkeys = dolphin_hotkeys_path();
-    if (!hotkeys.empty()) {
-        backup_file_once(hotkeys);
-        apply_ini_section_values(hotkeys, "Hotkeys", hotkey_values, {});
-    }
-
-    const fs::path hotkeys_profile = dolphin_hotkeys_profile_path();
-    if (!hotkeys_profile.empty()) {
-        backup_file_once(hotkeys_profile);
-        apply_ini_section_values(hotkeys_profile, "Profile", hotkey_values, {});
-    }
-
-    const fs::path dolphin_ini = dolphin_ini_path();
-    if (!dolphin_ini.empty()) {
-        backup_file_once(dolphin_ini);
-        apply_ini_section_values(dolphin_ini, "General",
-                                 {{"HotkeysRequireFocus", "False"}}, {});
-    }
+static void apply_dolphin_xr_gamecube_controls() {
+    request_dolphin_openxr_controller_bindings();
 }
 
 
 static bool dolphin_xr_gamecube_controls_need_apply() {
-    const fs::path profile = dolphin_gcpad_profile_path();
-    if (profile.empty())
+    if (!open_live_shared_state() || !g_shared_state)
         return false;
 
-    const std::vector<std::string> lines = read_text_lines(profile);
-    if (lines.empty())
-        return true;
-
-    size_t begin = 0;
-    size_t end = 0;
-    if (!find_ini_section(lines, "GCPad1", begin, end))
-        return true;
-
-    auto has_line = [&](const char* expected) {
-        for (size_t i = begin + 1; i < end; ++i) {
-            if (trim_ascii(lines[i]) == expected)
-                return true;
-        }
-        return false;
-    };
-
-    return !has_line("Device = OpenXR/0/OpenXR Controller") ||
-           !has_line("Buttons/Y = `Right Button Squeeze`&`Right Squeeze`") ||
-           !has_line("Buttons/Z = `Left Button Squeeze`&`Left Squeeze`");
+    return g_shared_state->inputBindingRequestGeneration == 0 ||
+           g_shared_state->inputBindingAppliedGeneration !=
+               g_shared_state->inputBindingRequestGeneration;
 }
 
 
 static void sync_dolphin_xr_gamecube_controls(bool enabled) {
     if (enabled) {
         apply_dolphin_xr_gamecube_controls();
-    } else {
-        restore_dolphin_gcpad1_controls();
-        restore_file_backup(dolphin_ini_path());
-        restore_file_backup(dolphin_hotkeys_path());
-        restore_file_backup(dolphin_hotkeys_profile_path());
     }
     g_last_auto_dolphin_xr_controls = enabled;
 }
 
 static void restore_dolphin_borrowed_controls() {
-    restore_dolphin_gcpad1_controls();
-    restore_file_backup(dolphin_ini_path());
-    restore_file_backup(dolphin_hotkeys_path());
-    restore_file_backup(dolphin_hotkeys_profile_path());
     g_last_auto_dolphin_xr_controls = false;
 }
 
@@ -966,39 +959,7 @@ static std::vector<fs::path> dolphin_gm8e01_settings_paths();
 static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths();
 
 static void apply_dolphin_vr_units_per_meter() {
-    const std::vector<std::pair<std::string, std::string>> forced_vr_values = {
-        {"UnitsPerMeter", "1.50"},
-        {"LeanBackAngle", "0."},
-        {"CameraForward", "0."},
-        {"HeadLockedCurvature", "0."},
-        {"ElementDepth", "0.0010"},
-    };
-    const std::vector<std::string> inherited_vr_keys = {
-        "VirtualScreen",
-        "DontClearScreen",
-        "OpcodeReplay",
-        "AutoVBIFromHMD",
-    };
-
-    const std::vector<std::pair<std::string, std::string>> legacy_values = {
-        {"UnitsPerMetre", "1.50"},
-    };
-
-    const std::vector<fs::path> paths = dolphin_gm8e01_vr_settings_paths();
-    if (paths.empty()) {
-        app_hook_log(L"No existing GM8E01 VR profile found; launch the game once in Dolphin before starting PrimedGun.");
-        return;
-    }
-
-    for (const fs::path& path : paths) {
-        if (path.empty())
-            continue;
-
-        apply_ini_section_values(path, "Graphics.VR", forced_vr_values, inherited_vr_keys);
-        apply_ini_section_values(path, "GFX.VR", {}, inherited_vr_keys);
-        apply_ini_section_values(path, "VR", legacy_values, inherited_vr_keys);
-        app_hook_log(L"Applied PrimedGun GM8E01 VR defaults in " + path.wstring());
-    }
+    request_dolphin_openxr_controller_bindings();
 }
 
 static void apply_dolphin_60fps_cap() {
@@ -1021,27 +982,19 @@ static void apply_dolphin_60fps_cap() {
 }
 
 static void apply_dolphin_required_runtime_config() {
+    request_dolphin_openxr_controller_bindings();
+
     const fs::path path = dolphin_ini_path();
     if (path.empty())
         return;
 
     backup_file_once(path);
-    apply_ini_section_values(path, "Core",
-                             {{"CPUThread", "True"},
-                              {"MMU", "True"}},
-                             {});
     apply_ini_section_values(path, "Input", {{"BackgroundInput", "True"}}, {});
-    app_hook_log(L"Applied Dolphin required runtime config: dual core, MMU, background input.");
+    app_hook_log(L"Applied Dolphin background input; requested Dolphin-side GM8E01 runtime defaults.");
 }
 
 static void apply_dolphin_xr_camera_forward_zero() {
-    const fs::path path = dolphin_gfx_ini_path();
-    if (path.empty())
-        return;
-
-    backup_file_once(path);
-    apply_ini_section_values(path, "VR", {{"CameraForward", "0."}}, {});
-    app_hook_log(L"Applied Dolphin XR CameraForward = 0.");
+    request_dolphin_openxr_controller_bindings();
 }
 
 static void disable_unmanaged_dolphin_codes_in(const fs::path& path) {
@@ -1129,6 +1082,8 @@ static std::vector<fs::path> existing_dolphin_game_settings_paths(const wchar_t*
                                                                   const fs::path& documents_path) {
     std::vector<fs::path> candidates;
     std::vector<fs::path> paths;
+
+    add_unique_path(candidates, hook_observed_dolphin_game_settings_path(folder_name));
 
     const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
     if (dolphin_pid) {
