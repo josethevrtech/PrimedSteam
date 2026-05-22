@@ -58,6 +58,9 @@ constexpr uint32_t kCPlayerGunRenderStart = 0x80041A8Cu;
 constexpr uint32_t kCPlayerGunRenderModelOffsetCave = 0x80001C00u;
 constexpr uint32_t kRenderHookModelOffsetWorldScratch = 0x817FE040u;
 constexpr uint32_t kRenderHookAdjustedGunPosScratch = 0x817FE050u;
+constexpr uint32_t kFirstPersonUpdateElevationPitchStore = 0x8000FA50u;
+constexpr uint32_t kFirstPersonUpdateElevationPitchStoreOriginal = 0xD01D01C0u;
+constexpr uint32_t kFirstPersonUpdateElevationPitchStoreCave = 0x80001C80u;
 
 std::atomic<bool> g_installed = false;
 uintptr_t g_memBase = 0;
@@ -222,6 +225,11 @@ struct RenderModelOffsetPatch {
 RenderModelOffsetPatch g_renderModelOffsetPatch = {
     kCPlayerGunRenderStart, kCPlayerGunRenderModelOffsetCave, 0, false, false};
 
+DynamicPpcPatch g_combatElevationPitchPatch = {
+    kFirstPersonUpdateElevationPitchStore, kFirstPersonUpdateElevationPitchStoreOriginal,
+    kLoadZeroToF1, kFirstPersonUpdateElevationPitchStoreCave,
+    L"CFirstPersonCamera script pitch/elevation store", false, false};
+
 bool IsMem1Range(uint32_t gcAddr, size_t size) {
     if (gcAddr < kMem1Start || gcAddr >= kMem1Start + kMem1Size) {
         return false;
@@ -238,6 +246,11 @@ uint32_t PpcBranch(uint32_t from, uint32_t to) {
 uint32_t PpcBeq(uint32_t from, uint32_t to) {
     const int32_t offset = static_cast<int32_t>(to - from);
     return 0x41820000u | (static_cast<uint32_t>(offset) & 0x0000FFFCu);
+}
+
+uint32_t PpcBne(uint32_t from, uint32_t to) {
+    const int32_t offset = static_cast<int32_t>(to - from);
+    return 0x40820000u | (static_cast<uint32_t>(offset) & 0x0000FFFCu);
 }
 
 uint32_t PpcAddiR4R1(uint16_t offset) {
@@ -1792,7 +1805,7 @@ void PatchOrbitCode() {
 }
 
 void PatchFirstPersonPitchLoad() {
-    if (!g_memBase || g_firstPersonPitchLoadPatch.applied) {
+    if (!g_memBase) {
         return;
     }
 
@@ -1801,9 +1814,13 @@ void PatchFirstPersonPitchLoad() {
     const uint32_t branch = PpcBranch(patch.address, patch.cave);
     if (current == branch) {
         patch.applied = true;
-        Log(L"GameTimingHooks first-person pitch load patch already present at 0x" +
-            std::to_wstring(patch.address) + L": " + patch.description);
         return;
+    }
+
+    if (patch.applied) {
+        patch.applied = false;
+        patch.loggedWaiting = false;
+        Log(L"GameTimingHooks first-person pitch load patch was restored by Dolphin; reapplying.");
     }
 
     if (current != patch.original) {
@@ -1847,15 +1864,18 @@ bool RestoreDynamicPatchState(const DynamicPpcPatch& patch) {
 }
 
 bool ApplyConditionalCombatPitchPatch(DynamicPpcPatch& patch) {
-    if (patch.applied) {
-        return true;
-    }
-
     const uint32_t current = ReadU32(patch.address);
     const uint32_t branch = PpcBranch(patch.address, patch.cave);
     if (current == branch) {
         patch.applied = true;
         return true;
+    }
+
+    if (patch.applied) {
+        patch.applied = false;
+        patch.loggedWaiting = false;
+        Log(L"GameTimingHooks combat orbit pitch patch was restored by Dolphin at 0x" +
+            std::to_wstring(patch.address) + L"; reapplying.");
     }
 
     if (current != patch.original && current != patch.replacement) {
@@ -1894,6 +1914,57 @@ bool ApplyConditionalCombatPitchPatch(DynamicPpcPatch& patch) {
     return false;
 }
 
+bool ApplyConditionalElevationPitchPatch(DynamicPpcPatch& patch) {
+    const uint32_t current = ReadU32(patch.address);
+    const uint32_t branch = PpcBranch(patch.address, patch.cave);
+    if (current == branch) {
+        patch.applied = true;
+        return true;
+    }
+
+    if (patch.applied) {
+        patch.applied = false;
+        patch.loggedWaiting = false;
+        Log(L"GameTimingHooks first-person elevation pitch store patch was restored by Dolphin; "
+            L"reapplying.");
+    }
+
+    if (current != patch.original) {
+        if (current != 0 && !patch.loggedWaiting) {
+            patch.loggedWaiting = true;
+            Log(L"GameTimingHooks waiting to patch first-person elevation pitch store; current "
+                L"instruction did not match.");
+        }
+        return false;
+    }
+
+    const uint32_t originalLabel = patch.cave + 0x20u;
+    const uint32_t zeroLabel = patch.cave + 0x28u;
+    const uint32_t returnAddr = patch.address + 4u;
+
+    WriteU32(patch.cave + 0x00u, 0x3D808045u);                      // lis r12, 0x8045
+    WriteU32(patch.cave + 0x04u, 0x618CA1A8u);                      // ori r12, r12, 0xA1A8
+    WriteU32(patch.cave + 0x08u, 0x818C084Cu);                      // lwz r12, 0x84C(r12)
+    WriteU32(patch.cave + 0x0Cu, 0x2C0C0000u);                      // cmpwi r12, 0
+    WriteU32(patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, originalLabel));
+    WriteU32(patch.cave + 0x14u, 0x816C0330u);                      // lwz r11, 0x330(r12)
+    WriteU32(patch.cave + 0x18u, 0x2C0B0000u);                      // cmpwi r11, 0
+    WriteU32(patch.cave + 0x1Cu, PpcBeq(patch.cave + 0x1Cu, zeroLabel));
+    WriteU32(patch.cave + 0x20u, patch.original);
+    WriteU32(patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, returnAddr));
+    WriteU32(patch.cave + 0x28u, 0xC00280B0u);                      // lfs f0, -0x7f50(r2)
+    WriteU32(patch.cave + 0x2Cu, patch.original);
+    WriteU32(patch.cave + 0x30u, PpcBranch(patch.cave + 0x30u, returnAddr));
+
+    if (WriteU32(patch.address, branch)) {
+        patch.applied = true;
+        Log(L"GameTimingHooks patched scan-conditional combat elevation pitch store.");
+        return true;
+    }
+
+    return false;
+}
+
 void UpdateCombatPitchPatchForLogicTick() {
     if (!g_installed.load() || !ResolveMemBase()) {
         return;
@@ -1903,6 +1974,7 @@ void UpdateCombatPitchPatchForLogicTick() {
     for (DynamicPpcPatch& patch : g_combatPitchPatches) {
         allOk = ApplyConditionalCombatPitchPatch(patch) && allOk;
     }
+    allOk = ApplyConditionalElevationPitchPatch(g_combatElevationPitchPatch) && allOk;
 
     if (allOk && !g_combatPitchPatchActive) {
         g_combatPitchPatchActive = true;
@@ -2337,6 +2409,7 @@ void SuppressLockCameraPitchForLogicTick() {
 }
 
 void PollFast(SharedState*) {
+    PatchFirstPersonPitchLoad();
     UpdateCombatPitchPatchForLogicTick();
     ApplyRenderModelOffsetPatch();
     TraceOrbitLockForLogicTick();
@@ -2368,6 +2441,7 @@ void Shutdown() {
         for (const DynamicPpcPatch& patch : g_combatPitchPatches) {
             RestoreDynamicPatchState(patch);
         }
+        RestoreDynamicPatchState(g_combatElevationPitchPatch);
         RestoreRenderModelOffsetPatch();
     }
     if (g_installed.exchange(false)) {
