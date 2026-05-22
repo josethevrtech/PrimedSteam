@@ -43,8 +43,14 @@ static IDXGISwapChain*         g_swapchain = nullptr;
 static ID3D11RenderTargetView* g_rtv = nullptr;
 static HWND                    g_hwnd = nullptr;
 static ID3D11ShaderResourceView* g_controller_layout_srv = nullptr;
+static ID3D11ShaderResourceView* g_default_arm_srv = nullptr;
+static ID3D11ShaderResourceView* g_samus_arm_srv = nullptr;
 static int g_controller_layout_width = 0;
 static int g_controller_layout_height = 0;
+static int g_default_arm_width = 0;
+static int g_default_arm_height = 0;
+static int g_samus_arm_width = 0;
+static int g_samus_arm_height = 0;
 
 static Settings       g_settings;
 static AppState       g_app;
@@ -502,24 +508,35 @@ static fs::path exe_directory() {
     return fs::path(buffer).parent_path();
 }
 
-static void release_controller_layout_texture() {
-    if (g_controller_layout_srv) {
-        g_controller_layout_srv->Release();
-        g_controller_layout_srv = nullptr;
+static void release_texture(ID3D11ShaderResourceView*& srv, int& width, int& height,
+                            ImTextureID& app_texture, int& app_width, int& app_height) {
+    if (srv) {
+        srv->Release();
+        srv = nullptr;
     }
-    g_controller_layout_width = 0;
-    g_controller_layout_height = 0;
-    g_app.controller_layout_texture = ImTextureID_Invalid;
-    g_app.controller_layout_width = 0;
-    g_app.controller_layout_height = 0;
+    width = 0;
+    height = 0;
+    app_texture = ImTextureID_Invalid;
+    app_width = 0;
+    app_height = 0;
 }
 
-static bool load_controller_layout_texture() {
-    release_controller_layout_texture();
+static void release_controller_layout_texture() {
+    release_texture(g_controller_layout_srv, g_controller_layout_width, g_controller_layout_height,
+                    g_app.controller_layout_texture, g_app.controller_layout_width,
+                    g_app.controller_layout_height);
+    release_texture(g_default_arm_srv, g_default_arm_width, g_default_arm_height,
+                    g_app.default_arm_texture, g_app.default_arm_width, g_app.default_arm_height);
+    release_texture(g_samus_arm_srv, g_samus_arm_width, g_samus_arm_height,
+                    g_app.samus_arm_texture, g_app.samus_arm_width, g_app.samus_arm_height);
+}
+
+static bool load_texture_file(const fs::path& image_path, ID3D11ShaderResourceView*& srv,
+                              int& out_width, int& out_height,
+                              ImTextureID& app_texture, int& app_width, int& app_height) {
+    release_texture(srv, out_width, out_height, app_texture, app_width, app_height);
     if (!g_device)
         return false;
-
-    const fs::path image_path = exe_directory() / L"assets" / L"controller layout.png";
 
     IWICImagingFactory* factory = nullptr;
     IWICBitmapDecoder* decoder = nullptr;
@@ -587,15 +604,14 @@ static bool load_controller_layout_texture() {
         srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         srv_desc.Texture2D.MipLevels = 1;
-        hr = g_device->CreateShaderResourceView(texture, &srv_desc, &g_controller_layout_srv);
+        hr = g_device->CreateShaderResourceView(texture, &srv_desc, &srv);
     }
-    if (SUCCEEDED(hr) && g_controller_layout_srv) {
-        g_controller_layout_width = static_cast<int>(width);
-        g_controller_layout_height = static_cast<int>(height);
-        g_app.controller_layout_texture =
-            static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(g_controller_layout_srv));
-        g_app.controller_layout_width = g_controller_layout_width;
-        g_app.controller_layout_height = g_controller_layout_height;
+    if (SUCCEEDED(hr) && srv) {
+        out_width = static_cast<int>(width);
+        out_height = static_cast<int>(height);
+        app_texture = static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(srv));
+        app_width = out_width;
+        app_height = out_height;
         ok = true;
     }
 
@@ -605,6 +621,33 @@ static bool load_controller_layout_texture() {
     if (decoder) decoder->Release();
     if (factory) factory->Release();
 
+    return ok;
+}
+
+static bool load_controller_layout_texture() {
+    bool ok = true;
+    const fs::path assets_dir = exe_directory() / L"assets";
+    ok = load_texture_file(assets_dir / L"controller layout.png",
+                           g_controller_layout_srv,
+                           g_controller_layout_width,
+                           g_controller_layout_height,
+                           g_app.controller_layout_texture,
+                           g_app.controller_layout_width,
+                           g_app.controller_layout_height) && ok;
+    ok = load_texture_file(assets_dir / L"default arm.png",
+                           g_default_arm_srv,
+                           g_default_arm_width,
+                           g_default_arm_height,
+                           g_app.default_arm_texture,
+                           g_app.default_arm_width,
+                           g_app.default_arm_height) && ok;
+    ok = load_texture_file(assets_dir / L"samus arm.png",
+                           g_samus_arm_srv,
+                           g_samus_arm_width,
+                           g_samus_arm_height,
+                           g_app.samus_arm_texture,
+                           g_app.samus_arm_width,
+                           g_app.samus_arm_height) && ok;
     return ok;
 }
 

@@ -85,6 +85,12 @@ struct AppState {
     ImTextureID controller_layout_texture = ImTextureID_Invalid;
     int controller_layout_width = 0;
     int controller_layout_height = 0;
+    ImTextureID default_arm_texture = ImTextureID_Invalid;
+    int default_arm_width = 0;
+    int default_arm_height = 0;
+    ImTextureID samus_arm_texture = ImTextureID_Invalid;
+    int samus_arm_width = 0;
+    int samus_arm_height = 0;
 };
 
 inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
@@ -337,6 +343,48 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 
         if (ImGui::BeginTabItem("Calibration")) {
             begin_panel("##calibration_panel", "Offset Tuning");
+            auto reset_calibration_offsets = [&]() {
+                s.offset_x = 0.0f;
+                s.offset_y = 0.0f;
+                s.offset_z = 0.0f;
+                s.model_offset_x = 0.0f;
+                s.model_offset_y = 0.0f;
+                s.model_offset_z = 0.0f;
+                s.rot_offset_x = 0.0f;
+                s.rot_offset_y = 0.0f;
+                s.rot_offset_z = 0.0f;
+            };
+            auto apply_samus_arm_preset = [&]() {
+                reset_calibration_offsets();
+                s.model_offset_y = -0.300f;
+                s.rot_offset_y = 20.0f;
+                s.rot_offset_z = -90.0f;
+            };
+            auto preset_button = [&](const char* id, const char* fallback_label,
+                                     ImTextureID texture, int width, int height) -> bool {
+                if (texture != ImTextureID_Invalid && width > 0 && height > 0) {
+                    const float image_height = scaled(104.0f);
+                    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+                    const ImVec2 image_size(image_height * aspect, image_height);
+                    ImGui::PushID(id);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                        ImVec2(scaled(8.0f), scaled(8.0f)));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.20f, 0.23f, 0.35f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.24f, 0.27f, 0.30f, 0.45f));
+                    const bool clicked = ImGui::ImageButton(
+                        "##preset_image", texture, image_size,
+                        ImVec2(0, 0), ImVec2(1, 1),
+                        ImVec4(0, 0, 0, 0),
+                        ImVec4(1, 1, 1, 1));
+                    ImGui::PopStyleColor(3);
+                    ImGui::PopStyleVar();
+                    ImGui::PopID();
+                    return clicked;
+                }
+                return ImGui::Button(fallback_label, ImVec2(scaled(120.0f), scaled(34.0f)));
+            };
+
             ImGui::SeparatorText("Position");
             slider_input("Left / right", &s.offset_x, -2, 2, 0.01f, 0.1f, "%.3f");
             slider_input("Up / down", &s.offset_y, -2, 2, 0.01f, 0.1f, "%.3f");
@@ -351,6 +399,22 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             slider_input("Pitch offset", &s.rot_offset_x, -180, 180, 0.5f, 5.0f, "%.2f");
             slider_input("Yaw offset", &s.rot_offset_y, -180, 180, 0.5f, 5.0f, "%.2f");
             slider_input("Roll offset", &s.rot_offset_z, -180, 180, 0.5f, 5.0f, "%.2f");
+
+            ImGui::SeparatorText("Presets");
+            ImGui::TextDisabled("Calibration presets");
+            if (preset_button("##default_arm_preset", "Default", app.default_arm_texture,
+                              app.default_arm_width, app.default_arm_height)) {
+                reset_calibration_offsets();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("default arm preset, zero offsets");
+            ImGui::SameLine();
+            if (preset_button("##samus_arm_preset", "Samus Arm", app.samus_arm_texture,
+                              app.samus_arm_width, app.samus_arm_height)) {
+                apply_samus_arm_preset();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Samus arm preset: model up/down -0.300, yaw 20, roll -90");
 
             ImGui::SeparatorText("Scale");
             slider_input("World scale", &s.world_scale, 1, 50, 0.5f, 5.0f, "%.2f");
