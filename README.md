@@ -21,7 +21,6 @@ For distribution/share, the useful files are:
 - `PrimedGun_DolphinHook.dll`
 - `assets/`
 - `core/`
-- `PrimeGun configs/`
 - `D3DCompiler_47.dll`
 - `libgcc_s_seh-1.dll`
 - `libstdc++-6.dll`
@@ -76,4 +75,4 @@ PrimedGun disables unmanaged AR/Gecko enabled-code lists so PrimedGun's app-owne
 - Thank you to the Metroid Prime modding community for the resources and research that helped make this possible.
 - Huge thank you to iChris4 for Dolphin ReduX development.
 - Thank you to the early testers: GeekyGami, Lucaspec72, TorchRing, detective_yoshi, PHA3ESH1FTGAMES, retrovideogamer, Samevi, Mochu, VideoGameEsoterica and VRified Games.
-- For further enhancements to your VR experience, join the Dolphin VR Discord.
+- For further enhancements to your VR experience, join the Dolphin VR Discord: https://discord.gg/GdmffzCTrh
