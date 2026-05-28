@@ -168,9 +168,11 @@ bool s_vr_settings_save_requested = false;
 u64 s_height_prompt_until_frame = 0;
 u64 s_prompt_gameplay_ready_since_frame = 0;
 u64 s_prompt_first_ready_timeout_frame = 0;
+u64 s_prompt_game_unloaded_since_frame = 0;
 bool s_prompt_skipped_first_ready = false;
 bool s_prompt_waiting_for_second_ready = false;
 bool s_prompt_shown_this_session = false;
+bool s_prompt_game_loaded = false;
 bool s_dpad_forced_input_disabled = false;
 bool s_dpad_input_was_disabled = false;
 u32 s_dpad_input_flags_addr = 0;
@@ -2213,8 +2215,25 @@ bool UpdateHeightPromptGate(const Core::CPUThreadGuard& guard,
   {
     s_prompt_gameplay_ready_since_frame = 0;
     s_height_prompt_until_frame = 0;
+    if (s_prompt_game_loaded)
+    {
+      if (s_prompt_game_unloaded_since_frame == 0)
+        s_prompt_game_unloaded_since_frame = s_frame_counter;
+
+      constexpr u64 game_unload_rearm_frames = 120;
+      if (s_frame_counter >= s_prompt_game_unloaded_since_frame + game_unload_rearm_frames)
+      {
+        s_prompt_first_ready_timeout_frame = 0;
+        s_prompt_skipped_first_ready = false;
+        s_prompt_waiting_for_second_ready = false;
+        s_prompt_shown_this_session = false;
+        s_prompt_game_loaded = false;
+      }
+    }
     return false;
   }
+  s_prompt_game_loaded = true;
+  s_prompt_game_unloaded_since_frame = 0;
 
   u32 gun = 0;
   const bool gameplay_ready = PlayerIsFirstPersonGunReady(guard, player) &&
@@ -2796,9 +2815,11 @@ void ResetNativeRuntime()
   s_height_prompt_until_frame = 0;
   s_prompt_gameplay_ready_since_frame = 0;
   s_prompt_first_ready_timeout_frame = 0;
+  s_prompt_game_unloaded_since_frame = 0;
   s_prompt_skipped_first_ready = false;
   s_prompt_waiting_for_second_ready = false;
   s_prompt_shown_this_session = false;
+  s_prompt_game_loaded = false;
 #ifdef ENABLE_VR
   Common::VR::OpenXRInputState::SetPrimeGunOverlay({});
 #endif
