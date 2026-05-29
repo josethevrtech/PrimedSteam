@@ -1187,7 +1187,7 @@ void MainWindow::ConnectStack()
                                  "  * Click the left thumbstick to open or close the in-headset settings menu.\n"
                                  "  * The menu is attached to the left controller.\n"
                                  "  * Use A to change the pointed-at setting.\n"
-                                 "  * Use Save Settings to write primedgun_settings.ini."), game_tab);
+                                 "  * Use Save Settings to write User/Config/Qt.ini."), game_tab);
   vr_notes->setObjectName(QStringLiteral("PrimeGunMuted"));
   setup_layout->addWidget(vr_notes);
   setup_layout->addStretch();
