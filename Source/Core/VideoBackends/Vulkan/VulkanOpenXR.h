@@ -71,6 +71,42 @@ struct XRVkLayeredSwapchain
   std::vector<std::unique_ptr<VKFramebuffer>> framebuffers;
 };
 
+struct XRPrimeGunVkOverlaySwapchain
+{
+  XRPrimeGunVkOverlaySwapchain();
+  ~XRPrimeGunVkOverlaySwapchain();
+  XRPrimeGunVkOverlaySwapchain(XRPrimeGunVkOverlaySwapchain&&) noexcept;
+  XRPrimeGunVkOverlaySwapchain& operator=(XRPrimeGunVkOverlaySwapchain&&) noexcept;
+
+  XRPrimeGunVkOverlaySwapchain(const XRPrimeGunVkOverlaySwapchain&) = delete;
+  XRPrimeGunVkOverlaySwapchain& operator=(const XRPrimeGunVkOverlaySwapchain&) = delete;
+
+  XrSwapchain swapchain = XR_NULL_HANDLE;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t content_kind = 0;
+  uint32_t generation = 0;
+  bool texture_ready = false;
+  std::vector<XrSwapchainImageVulkanKHR> images;
+  std::vector<std::unique_ptr<VKTexture>> textures;
+};
+
+struct XRPrimeGunVkLaserSwapchain
+{
+  XRPrimeGunVkLaserSwapchain();
+  ~XRPrimeGunVkLaserSwapchain();
+  XRPrimeGunVkLaserSwapchain(XRPrimeGunVkLaserSwapchain&&) noexcept;
+  XRPrimeGunVkLaserSwapchain& operator=(XRPrimeGunVkLaserSwapchain&&) noexcept;
+
+  XRPrimeGunVkLaserSwapchain(const XRPrimeGunVkLaserSwapchain&) = delete;
+  XRPrimeGunVkLaserSwapchain& operator=(const XRPrimeGunVkLaserSwapchain&) = delete;
+
+  XrSwapchain swapchain = XR_NULL_HANDLE;
+  bool texture_ready = false;
+  std::vector<XrSwapchainImageVulkanKHR> images;
+  std::vector<std::unique_ptr<VKTexture>> textures;
+};
+
 // Vulkan-specific OpenXR backend. Implements VR::IOpenXRSwapchain so that
 // Presenter::RenderXFBToScreen() can acquire/release eye images and submit
 // frames using only VideoCommon-visible types (AbstractFramebuffer*).
@@ -160,10 +196,18 @@ private:
   bool CreateEyeSwapchains(int64_t swapchain_format);
 
   void DestroySwapchains();
+  bool EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t generation, uint32_t width,
+                                      uint32_t height, const std::vector<uint32_t>& pixels);
+  void DestroyPrimeGunOverlaySwapchain();
+  bool EnsurePrimeGunLaserSwapchain();
+  void DestroyPrimeGunLaserSwapchain();
+  bool AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers);
   void FinalizePendingXRFrame(PendingXRFrame frame);
 
   std::array<XRVkEyeSwapchain, 2> m_eye_swapchains{};
   XRVkLayeredSwapchain m_layered_swapchain{};
+  XRPrimeGunVkOverlaySwapchain m_primegun_overlay_swapchain{};
+  XRPrimeGunVkLaserSwapchain m_primegun_laser_swapchain{};
 
   // Image index selected by xrAcquireSwapchainImage for the current frame.
   std::array<uint32_t, 2> m_acquired_image_index{0, 0};
@@ -176,6 +220,8 @@ private:
   // Reused per-frame composition data (avoids per-frame heap allocation).
   std::array<XrCompositionLayerProjectionView, 2> m_projection_views{};
   XrCompositionLayerProjection m_projection_layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+  XrCompositionLayerQuad m_primegun_overlay_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  XrCompositionLayerQuad m_primegun_laser_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
 
   std::atomic<bool> m_async_frame_finalization_in_flight{false};
   std::atomic<bool> m_async_frame_finalization_failed{false};

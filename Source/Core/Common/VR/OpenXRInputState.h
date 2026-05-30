@@ -92,6 +92,7 @@ struct PrimeGunVrOverlayState
   float xr_dpad_deadzone = 0.45f;
   bool directional_movement_enabled = true;
   bool directional_movement_use_right_stick = false;
+  bool directional_movement_use_hmd_direction = false;
   float directional_movement_deadzone = 0.25f;
   float directional_movement_speed = 14.0f;
   float directional_movement_accel = 45.0f;

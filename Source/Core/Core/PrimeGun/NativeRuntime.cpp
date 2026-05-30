@@ -1689,14 +1689,17 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
 
   const int move_hand = 0;
   const Common::VR::OpenXRControllerState& controller = snapshot.controllers[move_hand];
-  if (!controller.connected || !controller.aim_pose.valid)
+  if (!controller.connected ||
+      (!settings.directional_movement_use_hmd_direction && !controller.aim_pose.valid))
   {
     s_directional_move_speed = 0.0f;
     return;
   }
 
-  const Pose move_pose = PoseFromOpenXR(controller.aim_pose);
   const Pose hmd_pose = PoseFromOpenXR(snapshot.head_pose);
+  const Pose controller_move_pose = PoseFromOpenXR(controller.aim_pose);
+  const Pose move_pose =
+      settings.directional_movement_use_hmd_direction ? hmd_pose : controller_move_pose;
   const Common::VR::OpenXRControllerState& dpad_hand =
       snapshot.controllers[settings.use_right_hand ? 0 : 1];
   if (dpad_hand.connected && dpad_hand.aim_pose.valid &&
@@ -1811,7 +1814,7 @@ u32 VrMenuItemCountForTab(u32 tab)
   case 2:
     return 9;
   case 3:
-    return 7;
+    return 8;
   case 4:
     return 2;
   default:
@@ -1830,7 +1833,7 @@ bool VrMenuRowIsNumeric(u32 tab, u32 index)
   case 2:
     return index == 2 || index == 5 || index == 6 || index == 7;
   case 3:
-    return index >= 2 && index <= 5;
+    return index >= 3 && index <= 6;
   default:
     return false;
   }
@@ -1944,6 +1947,7 @@ void ResetMovementSettings(RuntimeSettings* settings)
 {
   settings->directional_movement_enabled = true;
   settings->directional_movement_use_right_stick = false;
+  settings->directional_movement_use_hmd_direction = false;
   settings->directional_movement_deadzone = 0.25f;
   settings->directional_movement_speed = 14.0f;
   settings->directional_movement_accel = 45.0f;
@@ -2031,19 +2035,19 @@ void AdjustVrMenuSetting(RuntimeSettings* settings, int direction)
   case 3:
     switch (s_vr_menu_selected_index)
     {
-    case 2:
+    case 3:
       settings->directional_movement_deadzone =
           std::clamp(settings->directional_movement_deadzone + sign * 0.05f, 0.0f, 0.95f);
       break;
-    case 3:
+    case 4:
       settings->directional_movement_speed =
           std::clamp(settings->directional_movement_speed + sign * 0.5f, 1.0f, 60.0f);
       break;
-    case 4:
+    case 5:
       settings->directional_movement_accel =
           std::clamp(settings->directional_movement_accel + sign * 1.0f, 1.0f, 120.0f);
       break;
-    case 5:
+    case 6:
       settings->directional_movement_air_accel =
           std::clamp(settings->directional_movement_air_accel + sign * 1.0f, 1.0f, 120.0f);
       break;
@@ -2115,7 +2119,10 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->directional_movement_enabled = !settings->directional_movement_enabled;
     else if (s_vr_menu_selected_index == 1)
       settings->directional_movement_use_right_stick = !settings->directional_movement_use_right_stick;
-    else if (s_vr_menu_selected_index == 6)
+    else if (s_vr_menu_selected_index == 2)
+      settings->directional_movement_use_hmd_direction =
+          !settings->directional_movement_use_hmd_direction;
+    else if (s_vr_menu_selected_index == 7)
       ResetMovementSettings(settings);
     return;
   }
@@ -2186,6 +2193,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.xr_dpad_deadzone = settings.xr_dpad_deadzone;
   overlay.directional_movement_enabled = settings.directional_movement_enabled;
   overlay.directional_movement_use_right_stick = settings.directional_movement_use_right_stick;
+  overlay.directional_movement_use_hmd_direction = settings.directional_movement_use_hmd_direction;
   overlay.directional_movement_deadzone = settings.directional_movement_deadzone;
   overlay.directional_movement_speed = settings.directional_movement_speed;
   overlay.directional_movement_accel = settings.directional_movement_accel;

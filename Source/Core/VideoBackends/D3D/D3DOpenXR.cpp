@@ -275,7 +275,7 @@ bool MenuRowIsNumeric(uint32_t tab, int index)
   case 2:
     return index == 2 || index == 5 || index == 6 || index == 7;
   case 3:
-    return index >= 2 && index <= 5;
+    return index >= 3 && index <= 6;
   default:
     return false;
   }
@@ -306,6 +306,7 @@ std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimeGunVrOverlayState& s)
   case 3:
     return {{"DIRECTIONAL MOVE", s.directional_movement_enabled ? "ON" : "OFF"},
             {"MOVEMENT STICK", s.directional_movement_use_right_stick ? "RIGHT" : "LEFT"},
+            {"MOVE DIRECTION", s.directional_movement_use_hmd_direction ? "HMD" : "CONTROLLER"},
             {"MOVE DEADZONE", FloatText(s.directional_movement_deadzone, 2)},
             {"MOVE SPEED", FloatText(s.directional_movement_speed, 1)},
             {"MOVE ACCEL", FloatText(s.directional_movement_accel, 1)},

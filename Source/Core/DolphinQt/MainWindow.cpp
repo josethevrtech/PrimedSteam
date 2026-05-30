@@ -945,6 +945,10 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/directional_movement_use_right_stick"),
                        runtime.directional_movement_use_right_stick)
             .toBool();
+    runtime.directional_movement_use_hmd_direction =
+        settings.value(QStringLiteral("primegun/directional_movement_use_hmd_direction"),
+                       runtime.directional_movement_use_hmd_direction)
+            .toBool();
     runtime.directional_movement_deadzone =
         settings.value(QStringLiteral("primegun/directional_movement_deadzone"),
                        runtime.directional_movement_deadzone)
@@ -1006,6 +1010,8 @@ void MainWindow::ConnectStack()
                       runtime.directional_movement_enabled);
     settings.setValue(QStringLiteral("primegun/directional_movement_use_right_stick"),
                       runtime.directional_movement_use_right_stick);
+    settings.setValue(QStringLiteral("primegun/directional_movement_use_hmd_direction"),
+                      runtime.directional_movement_use_hmd_direction);
     settings.setValue(QStringLiteral("primegun/directional_movement_deadzone"),
                       runtime.directional_movement_deadzone);
     settings.setValue(QStringLiteral("primegun/directional_movement_speed"),
@@ -1106,7 +1112,7 @@ void MainWindow::ConnectStack()
   header_layout->setContentsMargins(14, 12, 14, 12);
   auto* brand = new QLabel(tr("PrimedGun"), header);
   brand->setObjectName(QStringLiteral("PrimeGunTitle"));
-  auto* version = new QLabel(tr("v0.9.9b"), header);
+  auto* version = new QLabel(tr("v0.9.9c"), header);
   version->setObjectName(QStringLiteral("PrimeGunMuted"));
   auto* status_tracking = new QLabel(tr("Waiting for DolphinXR OpenXR"), header);
   status_tracking->setObjectName(QStringLiteral("PrimeGunBad"));
@@ -1339,6 +1345,15 @@ void MainWindow::ConnectStack()
   move_stick_row->addWidget(right_stick);
   move_stick_row->addStretch();
   controller_layout->addLayout(move_stick_row);
+  auto* controller_direction = new QRadioButton(tr("Controller direction"), game_tab);
+  auto* hmd_direction = new QRadioButton(tr("HMD direction"), game_tab);
+  controller_direction->setChecked(!runtime->directional_movement_use_hmd_direction);
+  hmd_direction->setChecked(runtime->directional_movement_use_hmd_direction);
+  auto* movement_direction_row = new QHBoxLayout;
+  movement_direction_row->addWidget(controller_direction);
+  movement_direction_row->addWidget(hmd_direction);
+  movement_direction_row->addStretch();
+  controller_layout->addLayout(movement_direction_row);
   auto* movement_deadzone_spin =
       add_float_row(controller_layout, tr("Movement deadzone"), 0.05, 0.80, 0.01,
                     runtime->directional_movement_deadzone,
@@ -1458,7 +1473,7 @@ void MainWindow::ConnectStack()
   auto* footer = new QHBoxLayout;
   auto* reset_all = new QPushButton(tr("Reset All"), game_tab);
   auto* save_settings_button = new QPushButton(tr("Save Settings"), game_tab);
-  auto* credit = new QLabel(tr("By Nobbie   v0.9.9b"), game_tab);
+  auto* credit = new QLabel(tr("By Nobbie   v0.9.9c"), game_tab);
   credit->setObjectName(QStringLiteral("PrimeGunMuted"));
   footer->addWidget(reset_all);
   footer->addWidget(save_settings_button);
@@ -1473,6 +1488,8 @@ void MainWindow::ConnectStack()
     const QSignalBlocker movement_enabled_blocker{movement_enabled};
     const QSignalBlocker left_stick_blocker{left_stick};
     const QSignalBlocker right_stick_blocker{right_stick};
+    const QSignalBlocker controller_direction_blocker{controller_direction};
+    const QSignalBlocker hmd_direction_blocker{hmd_direction};
     const QSignalBlocker targeting_enabled_blocker{targeting_enabled};
     const auto set_float = [float_rows](QDoubleSpinBox* spin, double value) {
       QSlider* linked_slider = nullptr;
@@ -1500,6 +1517,8 @@ void MainWindow::ConnectStack()
     movement_enabled->setChecked(runtime->directional_movement_enabled);
     left_stick->setChecked(!runtime->directional_movement_use_right_stick);
     right_stick->setChecked(runtime->directional_movement_use_right_stick);
+    controller_direction->setChecked(!runtime->directional_movement_use_hmd_direction);
+    hmd_direction->setChecked(runtime->directional_movement_use_hmd_direction);
     targeting_enabled->setChecked(runtime->gun_targeting_enabled);
     set_float(dpad_radius_spin, runtime->xr_dpad_head_radius);
     set_float(dpad_below_spin, runtime->xr_dpad_head_y_below);
@@ -1534,6 +1553,7 @@ void MainWindow::ConnectStack()
     runtime->xr_dpad_enabled = true;
     runtime->directional_movement_enabled = true;
     runtime->directional_movement_use_right_stick = false;
+    runtime->directional_movement_use_hmd_direction = false;
     runtime->xr_dpad_head_radius = 0.18f;
     runtime->xr_dpad_head_y_below = 0.14f;
     runtime->xr_dpad_deadzone = 0.45f;
@@ -1585,6 +1605,21 @@ void MainWindow::ConnectStack()
     if (checked)
     {
       runtime->directional_movement_use_right_stick = true;
+      apply_runtime();
+    }
+  });
+  connect(controller_direction, &QRadioButton::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    if (checked)
+    {
+      runtime->directional_movement_use_hmd_direction = false;
+      apply_runtime();
+    }
+  });
+  connect(hmd_direction, &QRadioButton::toggled, this, [runtime, apply_runtime](bool checked) {
+    if (checked)
+    {
+      runtime->directional_movement_use_hmd_direction = true;
       apply_runtime();
     }
   });

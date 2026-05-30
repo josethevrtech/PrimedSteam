@@ -29,6 +29,45 @@
 #include "VideoCommon/TextureConfig.h"
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/PrimeGunOverlayCommon.h"
+
+static bool SelectPrimeGunOverlaySwapchainFormat(XrSession session, int64_t* out_format)
+{
+  uint32_t format_count = 0;
+  XrResult result = xrEnumerateSwapchainFormats(session, 0, &format_count, nullptr);
+  if (XR_FAILED(result) || format_count == 0)
+  {
+    ERROR_LOG_FMT(VIDEO, "OpenXR: xrEnumerateSwapchainFormats for PrimeGun overlay failed ({}).",
+                  static_cast<int>(result));
+    return false;
+  }
+
+  std::vector<int64_t> runtime_formats(format_count);
+  result = xrEnumerateSwapchainFormats(session, format_count, &format_count, runtime_formats.data());
+  if (XR_FAILED(result))
+  {
+    ERROR_LOG_FMT(VIDEO, "OpenXR: xrEnumerateSwapchainFormats for PrimeGun overlay failed ({}).",
+                  static_cast<int>(result));
+    return false;
+  }
+
+  static constexpr std::array<VkFormat, 4> preferred_formats = {
+      VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM,
+      VK_FORMAT_B8G8R8A8_SRGB};
+
+  for (const VkFormat preferred : preferred_formats)
+  {
+    const int64_t wanted = static_cast<int64_t>(preferred);
+    if (std::find(runtime_formats.begin(), runtime_formats.end(), wanted) != runtime_formats.end())
+    {
+      *out_format = wanted;
+      return true;
+    }
+  }
+
+  WARN_LOG_FMT(VIDEO, "OpenXR: No RGBA/BGRA format available for PrimeGun overlay.");
+  return false;
+}
 
 #ifdef _WIN32
 #include <windows.h>  // for SEH __try/__except
@@ -88,6 +127,20 @@ XRVkLayeredSwapchain::XRVkLayeredSwapchain() = default;
 XRVkLayeredSwapchain::~XRVkLayeredSwapchain() = default;
 XRVkLayeredSwapchain::XRVkLayeredSwapchain(XRVkLayeredSwapchain&&) noexcept = default;
 XRVkLayeredSwapchain& XRVkLayeredSwapchain::operator=(XRVkLayeredSwapchain&&) noexcept = default;
+
+XRPrimeGunVkOverlaySwapchain::XRPrimeGunVkOverlaySwapchain() = default;
+XRPrimeGunVkOverlaySwapchain::~XRPrimeGunVkOverlaySwapchain() = default;
+XRPrimeGunVkOverlaySwapchain::XRPrimeGunVkOverlaySwapchain(
+    XRPrimeGunVkOverlaySwapchain&&) noexcept = default;
+XRPrimeGunVkOverlaySwapchain& XRPrimeGunVkOverlaySwapchain::operator=(
+    XRPrimeGunVkOverlaySwapchain&&) noexcept = default;
+
+XRPrimeGunVkLaserSwapchain::XRPrimeGunVkLaserSwapchain() = default;
+XRPrimeGunVkLaserSwapchain::~XRPrimeGunVkLaserSwapchain() = default;
+XRPrimeGunVkLaserSwapchain::XRPrimeGunVkLaserSwapchain(
+    XRPrimeGunVkLaserSwapchain&&) noexcept = default;
+XRPrimeGunVkLaserSwapchain& XRPrimeGunVkLaserSwapchain::operator=(
+    XRPrimeGunVkLaserSwapchain&&) noexcept = default;
 
 static const char* VkFormatToString(int64_t format)
 {
@@ -988,6 +1041,9 @@ void VulkanOpenXR::DestroySwapchains()
   if (g_vulkan_context)
     vkDeviceWaitIdle(g_vulkan_context->GetDevice());
 
+  DestroyPrimeGunOverlaySwapchain();
+  DestroyPrimeGunLaserSwapchain();
+
   if (m_layered_image_acquired && m_layered_swapchain.swapchain != XR_NULL_HANDLE)
   {
     XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -1061,6 +1117,370 @@ void VulkanOpenXR::DestroySwapchains()
       sc.swapchain = XR_NULL_HANDLE;
     }
   }
+}
+
+void VulkanOpenXR::DestroyPrimeGunOverlaySwapchain()
+{
+  auto& overlay = m_primegun_overlay_swapchain;
+  overlay.textures.clear();
+  overlay.images.clear();
+  overlay.width = 0;
+  overlay.height = 0;
+  overlay.content_kind = 0;
+  overlay.generation = 0;
+  overlay.texture_ready = false;
+
+  if (overlay.swapchain != XR_NULL_HANDLE)
+  {
+    const XrResult result = xrDestroySwapchain(overlay.swapchain);
+    if (XR_FAILED(result))
+      WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun Vulkan overlay xrDestroySwapchain failed ({}).",
+                   static_cast<int>(result));
+    overlay.swapchain = XR_NULL_HANDLE;
+  }
+}
+
+void VulkanOpenXR::DestroyPrimeGunLaserSwapchain()
+{
+  auto& laser = m_primegun_laser_swapchain;
+  laser.textures.clear();
+  laser.images.clear();
+  laser.texture_ready = false;
+
+  if (laser.swapchain != XR_NULL_HANDLE)
+  {
+    const XrResult result = xrDestroySwapchain(laser.swapchain);
+    if (XR_FAILED(result))
+      WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun Vulkan laser xrDestroySwapchain failed ({}).",
+                   static_cast<int>(result));
+    laser.swapchain = XR_NULL_HANDLE;
+  }
+}
+
+bool VulkanOpenXR::EnsurePrimeGunLaserSwapchain()
+{
+  auto& laser = m_primegun_laser_swapchain;
+  if (laser.texture_ready && laser.swapchain != XR_NULL_HANDLE)
+    return true;
+
+  DestroyPrimeGunLaserSwapchain();
+
+  int64_t swapchain_format = 0;
+  if (!SelectPrimeGunOverlaySwapchainFormat(VR::g_openxr->GetSession(), &swapchain_format))
+    return false;
+
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.arraySize = 1;
+  info.format = swapchain_format;
+  info.width = 16;
+  info.height = 10;
+  info.mipCount = 1;
+  info.faceCount = 1;
+  info.sampleCount = 1;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+
+  XrResult result = xrCreateSwapchain(VR::g_openxr->GetSession(), &info, &laser.swapchain);
+  if (XR_FAILED(result) || laser.swapchain == XR_NULL_HANDLE)
+    return false;
+
+  uint32_t image_count = 0;
+  result = xrEnumerateSwapchainImages(laser.swapchain, 0, &image_count, nullptr);
+  if (XR_FAILED(result) || image_count == 0)
+  {
+    DestroyPrimeGunLaserSwapchain();
+    return false;
+  }
+
+  laser.images.assign(image_count, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+  result = xrEnumerateSwapchainImages(
+      laser.swapchain, image_count, &image_count,
+      reinterpret_cast<XrSwapchainImageBaseHeader*>(laser.images.data()));
+  if (XR_FAILED(result))
+  {
+    DestroyPrimeGunLaserSwapchain();
+    return false;
+  }
+
+  const VkFormat vk_format = static_cast<VkFormat>(swapchain_format);
+  const AbstractTextureFormat abstract_format = VkFormatToAbstractFormat(vk_format);
+  TextureConfig tex_config(16, 10, 1, 1, 1, abstract_format, 0, AbstractTextureType::Texture_2D);
+  laser.textures.resize(image_count);
+  for (uint32_t i = 0; i < image_count; ++i)
+  {
+    laser.textures[i] = VKTexture::CreateAdopted(tex_config, laser.images[i].image,
+                                                 VK_IMAGE_VIEW_TYPE_2D,
+                                                 VK_IMAGE_LAYOUT_UNDEFINED, vk_format);
+    if (!laser.textures[i])
+    {
+      DestroyPrimeGunLaserSwapchain();
+      return false;
+    }
+  }
+
+  std::array<uint32_t, 160> pixels{};
+  for (int y = 3; y < 7; ++y)
+    for (int x = 0; x < 16; ++x)
+      pixels[static_cast<size_t>(y * 16 + x)] = 0xE080D8FFu;
+
+  for (uint32_t i = 0; i < image_count; ++i)
+  {
+    uint32_t acquired = 0;
+    XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    result = xrAcquireSwapchainImage(laser.swapchain, &acquire_info, &acquired);
+    if (XR_FAILED(result))
+    {
+      DestroyPrimeGunLaserSwapchain();
+      return false;
+    }
+
+    XrSwapchainImageWaitInfo wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait_info.timeout = XR_INFINITE_DURATION;
+    result = xrWaitSwapchainImage(laser.swapchain, &wait_info);
+    if (XR_SUCCEEDED(result) && acquired < laser.textures.size())
+    {
+      StateTracker::GetInstance()->EndRenderPass();
+      laser.textures[acquired]->Load(0, 16, 10, 16, reinterpret_cast<const u8*>(pixels.data()),
+                                     pixels.size() * sizeof(uint32_t), 0);
+      g_command_buffer_mgr->SubmitCommandBuffer(false, true);
+      StateTracker::GetInstance()->InvalidateCachedState();
+    }
+
+    XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(laser.swapchain, &release_info);
+    if (XR_FAILED(result))
+    {
+      DestroyPrimeGunLaserSwapchain();
+      return false;
+    }
+  }
+
+  laser.texture_ready = true;
+  return true;
+}
+
+bool VulkanOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_t generation,
+                                                  uint32_t width, uint32_t height,
+                                                  const std::vector<uint32_t>& pixels)
+{
+  auto& overlay = m_primegun_overlay_swapchain;
+  if (overlay.texture_ready && overlay.swapchain != XR_NULL_HANDLE &&
+      overlay.content_kind == content_kind && overlay.generation == generation &&
+      overlay.width == width && overlay.height == height)
+  {
+    return true;
+  }
+
+  DestroyPrimeGunOverlaySwapchain();
+  overlay.width = width;
+  overlay.height = height;
+
+  int64_t swapchain_format = 0;
+  if (!SelectPrimeGunOverlaySwapchainFormat(VR::g_openxr->GetSession(), &swapchain_format))
+    return false;
+
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.arraySize = 1;
+  info.format = swapchain_format;
+  info.width = width;
+  info.height = height;
+  info.mipCount = 1;
+  info.faceCount = 1;
+  info.sampleCount = 1;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+
+  XrResult result = xrCreateSwapchain(VR::g_openxr->GetSession(), &info, &overlay.swapchain);
+  if (XR_FAILED(result) || overlay.swapchain == XR_NULL_HANDLE)
+  {
+    WARN_LOG_FMT(VIDEO, "OpenXR: PrimeGun Vulkan overlay xrCreateSwapchain failed ({}).",
+                 static_cast<int>(result));
+    return false;
+  }
+
+  uint32_t image_count = 0;
+  result = xrEnumerateSwapchainImages(overlay.swapchain, 0, &image_count, nullptr);
+  if (XR_FAILED(result) || image_count == 0)
+  {
+    DestroyPrimeGunOverlaySwapchain();
+    return false;
+  }
+
+  overlay.images.assign(image_count, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+  result = xrEnumerateSwapchainImages(
+      overlay.swapchain, image_count, &image_count,
+      reinterpret_cast<XrSwapchainImageBaseHeader*>(overlay.images.data()));
+  if (XR_FAILED(result))
+  {
+    DestroyPrimeGunOverlaySwapchain();
+    return false;
+  }
+
+  const VkFormat vk_format = static_cast<VkFormat>(swapchain_format);
+  const AbstractTextureFormat abstract_format = VkFormatToAbstractFormat(vk_format);
+  TextureConfig tex_config(width, height, 1, 1, 1, abstract_format, 0,
+                           AbstractTextureType::Texture_2D);
+  overlay.textures.resize(image_count);
+  for (uint32_t i = 0; i < image_count; ++i)
+  {
+    overlay.textures[i] = VKTexture::CreateAdopted(tex_config, overlay.images[i].image,
+                                                   VK_IMAGE_VIEW_TYPE_2D,
+                                                   VK_IMAGE_LAYOUT_UNDEFINED, vk_format);
+    if (!overlay.textures[i])
+    {
+      DestroyPrimeGunOverlaySwapchain();
+      return false;
+    }
+  }
+
+  for (uint32_t i = 0; i < image_count; ++i)
+  {
+    uint32_t acquired = 0;
+    XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    result = xrAcquireSwapchainImage(overlay.swapchain, &acquire_info, &acquired);
+    if (XR_FAILED(result))
+    {
+      DestroyPrimeGunOverlaySwapchain();
+      return false;
+    }
+
+    XrSwapchainImageWaitInfo wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait_info.timeout = XR_INFINITE_DURATION;
+    result = xrWaitSwapchainImage(overlay.swapchain, &wait_info);
+    if (XR_SUCCEEDED(result) && acquired < overlay.textures.size())
+    {
+      StateTracker::GetInstance()->EndRenderPass();
+      overlay.textures[acquired]->Load(0, width, height, width,
+                                       reinterpret_cast<const u8*>(pixels.data()),
+                                       pixels.size() * sizeof(uint32_t), 0);
+      g_command_buffer_mgr->SubmitCommandBuffer(false, true);
+      StateTracker::GetInstance()->InvalidateCachedState();
+    }
+
+    XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(overlay.swapchain, &release_info);
+    if (XR_FAILED(result))
+    {
+      DestroyPrimeGunOverlaySwapchain();
+      return false;
+    }
+  }
+
+  overlay.content_kind = content_kind;
+  overlay.generation = generation;
+  overlay.texture_ready = true;
+  return true;
+}
+
+bool VulkanOpenXR::AppendPrimeGunOverlayLayers(std::vector<XrCompositionLayerBaseHeader*>* layers)
+{
+  if (!VR::g_openxr || !layers)
+    return false;
+
+  namespace PGO = PrimeGun::Overlay;
+  const auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
+  if (!overlay.menu_visible && !overlay.prompt_visible && !overlay.weapon_panel_visible)
+    return false;
+
+  const Common::VR::OpenXRInputSnapshot snapshot = Common::VR::OpenXRInputState::GetSnapshot();
+  if (!snapshot.runtime_active)
+    return false;
+
+  const bool menu = overlay.menu_visible;
+  const bool weapon_panel = !menu && overlay.weapon_panel_visible;
+  const uint32_t content_kind = menu ? 2u : weapon_panel ? 3u : 1u;
+  const uint32_t width = menu ? 1024 : weapon_panel ? 512 : 1024;
+  const uint32_t height = menu ? 512 : weapon_panel ? 512 : 384;
+  const uint32_t generation = menu ? overlay.generation :
+                              weapon_panel ? (100u + overlay.weapon_selected_index) :
+                                             1u;
+  const std::vector<uint32_t> pixels = menu        ? PGO::BuildMenuPixels(width, height, overlay) :
+                                       weapon_panel ? PGO::BuildWeaponPanelPixels(width, height, overlay) :
+                                                      PGO::BuildPromptPixels(width, height);
+  if (!EnsurePrimeGunOverlaySwapchain(content_kind, generation, width, height, pixels))
+    return false;
+
+  m_primegun_overlay_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+  m_primegun_overlay_layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                                        XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+  m_primegun_overlay_layer.space = VR::g_openxr->GetReferenceSpace();
+  m_primegun_overlay_layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+  m_primegun_overlay_layer.subImage.swapchain = m_primegun_overlay_swapchain.swapchain;
+  m_primegun_overlay_layer.subImage.imageRect.offset = {0, 0};
+  m_primegun_overlay_layer.subImage.imageRect.extent = {static_cast<int32_t>(width),
+                                                        static_cast<int32_t>(height)};
+
+  PGO::HybridControllerPose left_pose = PGO::MakeGripPose(snapshot.controllers[0]);
+  PGO::HybridControllerPose right_pose = PGO::MakeAimPose(snapshot.controllers[1]);
+  PGO::AddTrackingOrigin(&left_pose, snapshot);
+  PGO::AddTrackingOrigin(&right_pose, snapshot);
+
+  if (menu && left_pose.valid)
+  {
+    const XrQuaternionf q = left_pose.orientation;
+    m_primegun_overlay_layer.pose.orientation = PGO::MulQuat(
+        q, {-0.70710678f, 0.0f, 0.0f, 0.70710678f});
+    const XrVector3f offset = PGO::RotateVector(m_primegun_overlay_layer.pose.orientation,
+                                                {0.0f, 0.10f, -0.18f});
+    m_primegun_overlay_layer.pose.position = {left_pose.position.x + offset.x,
+                                              left_pose.position.y + offset.y,
+                                              left_pose.position.z + offset.z};
+    m_primegun_overlay_layer.size = {1.05f, 0.72f};
+  }
+  else if (weapon_panel)
+  {
+    m_primegun_overlay_layer.pose.orientation = {overlay.weapon_panel_orientation[0],
+                                                 overlay.weapon_panel_orientation[1],
+                                                 overlay.weapon_panel_orientation[2],
+                                                 overlay.weapon_panel_orientation[3]};
+    const XrVector3f offset =
+        PGO::RotateVector(m_primegun_overlay_layer.pose.orientation, {0.0f, 0.055f, -0.26f});
+    m_primegun_overlay_layer.pose.position = {
+        overlay.weapon_panel_position[0] + snapshot.tracking_origin_position[0] + offset.x,
+        overlay.weapon_panel_position[1] + snapshot.tracking_origin_position[1] + offset.y,
+        overlay.weapon_panel_position[2] + snapshot.tracking_origin_position[2] + offset.z};
+    m_primegun_overlay_layer.size = {0.42f, 0.42f};
+  }
+  else if (snapshot.head_pose.valid)
+  {
+    const auto& head = snapshot.head_pose;
+    m_primegun_overlay_layer.pose.orientation = {head.orientation[0], head.orientation[1],
+                                                 head.orientation[2], head.orientation[3]};
+    const XrVector3f offset =
+        PGO::RotateVector(m_primegun_overlay_layer.pose.orientation, {0.0f, 0.0f, -1.35f});
+    m_primegun_overlay_layer.pose.position = {
+        head.position[0] + snapshot.tracking_origin_position[0] + offset.x,
+        head.position[1] + snapshot.tracking_origin_position[1] + offset.y,
+        head.position[2] + snapshot.tracking_origin_position[2] + offset.z};
+    m_primegun_overlay_layer.size = {0.675f, 0.25f};
+  }
+  else
+  {
+    return false;
+  }
+
+  layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_primegun_overlay_layer));
+
+  if (menu && right_pose.valid && EnsurePrimeGunLaserSwapchain())
+  {
+    const XrQuaternionf q = right_pose.orientation;
+    const XrVector3f forward = PGO::RotateVector(q, {0.0f, 0.0f, -1.0f});
+    m_primegun_laser_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+    m_primegun_laser_layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                                        XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    m_primegun_laser_layer.space = VR::g_openxr->GetReferenceSpace();
+    m_primegun_laser_layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    m_primegun_laser_layer.subImage.swapchain = m_primegun_laser_swapchain.swapchain;
+    m_primegun_laser_layer.subImage.imageRect.offset = {0, 0};
+    m_primegun_laser_layer.subImage.imageRect.extent = {16, 10};
+    m_primegun_laser_layer.pose.orientation =
+        PGO::MulQuat(q, {-0.70710678f, 0.0f, 0.0f, 0.70710678f});
+    m_primegun_laser_layer.pose.position = {right_pose.position.x + forward.x * 0.40f,
+                                            right_pose.position.y + forward.y * 0.40f,
+                                            right_pose.position.z + forward.z * 0.40f};
+    m_primegun_laser_layer.size = {0.008f, 0.80f};
+    layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_primegun_laser_layer));
+  }
+
+  return true;
 }
 
 AbstractFramebuffer* VulkanOpenXR::AcquireEyeFramebuffer(uint32_t eye_index)
@@ -1432,8 +1852,9 @@ bool VulkanOpenXR::SubmitFrame()
                                     XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
   }
 
-  const std::vector<XrCompositionLayerBaseHeader*> layers = {
+  std::vector<XrCompositionLayerBaseHeader*> layers = {
       reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_projection_layer)};
+  AppendPrimeGunOverlayLayers(&layers);
 
   const bool result = VR::g_openxr->EndFrame(layers);
   m_frame_uses_layered_swapchain = false;
