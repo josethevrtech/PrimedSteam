@@ -6,4 +6,26 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     ln -sf "app/com.discordapp.Discord/discord-ipc-$i" "$XDG_RUNTIME_DIR/discord-ipc-$i"
 done
 
+host_home="/home/$(id -un)"
+
+for runtime_json in \
+  "$host_home/.config/openxr/1/active_runtime.json" \
+  "$host_home/.var/app/com.valvesoftware.Steam/config/openxr/1/active_runtime.json"
+do
+  if [ -r "$runtime_json" ]; then
+    export XR_RUNTIME_JSON="$runtime_json"
+    break
+  fi
+done
+
+for vr_paths in \
+  "$host_home/.config/openvr/openvrpaths.vrpath" \
+  "$host_home/.var/app/com.valvesoftware.Steam/config/openvr/openvrpaths.vrpath"
+do
+  if [ -r "$vr_paths" ]; then
+    export VR_PATHREG_OVERRIDE="$vr_paths"
+    break
+  fi
+done
+
 exec dolphin-emu "$@"

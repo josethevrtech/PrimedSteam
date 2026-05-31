@@ -9,19 +9,24 @@ finish-args:
   - --device=all
   - --socket=pulseaudio
   - --socket=wayland
-  - --socket=fallback-x11
+  - --socket=x11
   - --share=network
   - --share=ipc
   # required for the emulated bluetooth adapter feature to work.
   - --allow=bluetooth
   # required for OpenXR runtime discovery and IPC with SteamVR/Monado.
   - --filesystem=xdg-config/openxr:ro
+  - --filesystem=xdg-config/openvr:ro
   - --filesystem=xdg-data/openxr:ro
   - --filesystem=xdg-run/monado_comp_ipc
   - --filesystem=xdg-run/monado_comp_ipc_server
-  - --filesystem=xdg-run/steam:ro
-  - --filesystem=~/.steam:ro
-  - --filesystem=~/.local/share/Steam:ro
+  - --filesystem=xdg-run/steam
+  - --filesystem=~/.steam
+  - --filesystem=~/.local/share/Steam
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/config/openxr:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/config/openvr:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam
   - --filesystem=xdg-run/app/com.discordapp.Discord:create
   - --filesystem=xdg-run/discord-ipc-0:create
   # required to disable the screensaver in various desktops
@@ -36,6 +41,7 @@ modules:
   - name: libevdev
     buildsystem: meson
     config-opts:
+      - --libdir=lib
       - -Dtests=disabled
       - -Ddocumentation=disabled
     sources:
@@ -62,7 +68,7 @@ modules:
       - -DENABLE_SDL=ON
       - -DENABLE_EVDEV=ON
       - -DLIBEVDEV_INCLUDE_DIR=/app/include/libevdev-1.0
-      - -DLIBEVDEV_LIBRARY=/app/lib64/libevdev.so
+      - -DLIBEVDEV_LIBRARY=/app/lib/libevdev.so
       - -DENABLE_VULKAN=ON
       - -DENABLE_VR=ON
       - -DDISTRIBUTOR=PrimedGun
