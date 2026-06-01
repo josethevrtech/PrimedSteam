@@ -298,6 +298,15 @@ inline std::vector<MenuRow> BuildMenuRows(const Common::VR::PrimeGunVrOverlaySta
             {"RESET MOVEMENT", "PRESS"}};
   case 4:
     return {{"DEFAULT ARM PRESET", "APPLY"}, {"SAMUS ARM PRESET", "APPLY"}};
+  case 5:
+  {
+    auto slot_status = [&](uint32_t slot) {
+      return s.cannon_texture_slot == slot ? std::string("SELECTED") : std::string("SELECT");
+    };
+    return {{"DEFAULT", slot_status(0)}, {"SLOT 1", slot_status(1)},
+            {"SLOT 2", slot_status(2)}, {"SLOT 3", slot_status(3)},
+            {"SLOT 4", slot_status(4)}, {"CUSTOM", slot_status(5)}};
+  }
   default:
     return {{"TARGETING", s.gun_targeting_enabled ? "ON" : "OFF"},
             {"TARGET DISTANCE", FloatText(s.gun_targeting_distance, 1)},
@@ -337,14 +346,16 @@ inline std::vector<uint32_t> BuildMenuPixels(uint32_t width, uint32_t height,
   if (s.saved_notice)
     DrawText(pixels, width, height, "SETTINGS SAVED", 760, 34, 2, 0xFFFFE6B8u);
 
-  constexpr const char* tabs[] = {"AIMING", "CALIBRATION", "CONTROLLER", "MOVEMENT", "PRESETS"};
-  for (int i = 0; i < 5; ++i)
+  constexpr const char* tabs[] = {"AIMING", "CALIB", "CONTROL", "MOVE", "PRESETS", "TEXTURE"};
+  constexpr int tab_width = 150;
+  constexpr int tab_step = 162;
+  for (int i = 0; i < static_cast<int>(std::size(tabs)); ++i)
   {
-    const int x = 36 + i * 190;
+    const int x = 36 + i * tab_step;
     const bool active = i == static_cast<int>(s.tab);
-    FillRect(pixels, width, height, x, 64, 180, 38, active ? 0xD04A2C12u : 0x7030180Cu);
-    FillRect(pixels, width, height, x, 98, 180, 4, active ? 0xFFFFB030u : 0x604A2C12u);
-    DrawText(pixels, width, height, tabs[i], x + (180 - TextWidth(tabs[i], 2)) / 2, 75, 2,
+    FillRect(pixels, width, height, x, 64, tab_width, 38, active ? 0xD04A2C12u : 0x7030180Cu);
+    FillRect(pixels, width, height, x, 98, tab_width, 4, active ? 0xFFFFB030u : 0x604A2C12u);
+    DrawText(pixels, width, height, tabs[i], x + (tab_width - TextWidth(tabs[i], 2)) / 2, 75, 2,
              active ? 0xFFFFE6B8u : 0xFFD8C0A0u);
   }
 

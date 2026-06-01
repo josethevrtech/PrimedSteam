@@ -8,24 +8,34 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
+#include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #ifdef ENABLE_VR
 #include "Common/VR/OpenXRInputState.h"
 #endif
 
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/Core.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/System.h"
 
 #include "Core/PrimeGun/PrimeGunBuiltinPatches.inc"
+
+#include "VideoCommon/AsyncRequests.h"
+#include "VideoCommon/HiresTextures.h"
+#include "VideoCommon/TextureCacheBase.h"
+#include "VideoCommon/VideoConfig.h"
 
 namespace PrimeGun
 {
@@ -110,6 +120,17 @@ constexpr u32 GAMEFLOW_MAP_CAVE = 0x80002130u;
 constexpr u32 LOAD_ZERO_TO_F1 = 0xC02280B0u;
 constexpr u32 LOAD_ZERO_TO_F31 = 0xC3E280B0u;
 
+constexpr u32 VR_MENU_TAB_COUNT = 6;
+constexpr u32 VR_MENU_CANNON_TAB = 5;
+constexpr const char* PRIMEGUN_CANNON_GAME_ID = "GM8E01";
+constexpr const char* PRIMEGUN_CANNON_PACK_FOLDER = "000_PrimeGunCannon";
+constexpr const char* PRIMEGUN_CANNON_LIBRARY_FOLDER = "PrimeGun" DIR_SEP "CannonTextures";
+constexpr std::array<const char*, 3> PRIMEGUN_CANNON_TEXTURE_NAMES = {
+    "tex1_128x128_m_3c6ded49d64d30f2_14",
+    "tex1_128x128_m_bec6d78ea7dd739e_14",
+    "tex1_64x64_m_c7625e7ecd9cd5c2_14",
+};
+
 constexpr u32 FINAL_INPUT_OFFSET = 0xB54u;
 constexpr u32 FINAL_INPUT_RIGHT_STICK_X = FINAL_INPUT_OFFSET + 0x10u;
 constexpr u32 FINAL_INPUT_RIGHT_STICK_Y = FINAL_INPUT_OFFSET + 0x14u;
@@ -174,6 +195,8 @@ u32 s_vr_menu_selected_index = 0;
 u32 s_vr_menu_generation = 1;
 u64 s_vr_menu_saved_notice_until_frame = 0;
 u64 s_vr_menu_input_suppress_until_frame = 0;
+u32 s_vr_cannon_texture_slot = 0;
+u64 s_vr_cannon_texture_notice_until_frame = 0;
 bool s_vr_settings_save_requested = false;
 u64 s_height_prompt_until_frame = 0;
 u64 s_prompt_gameplay_ready_since_frame = 0;
@@ -1805,6 +1828,115 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
 #endif
 
 #ifdef ENABLE_VR
+std::string PrimeGunCannonActiveFolder()
+{
+  return File::GetUserPath(D_HIRESTEXTURES_IDX) + PRIMEGUN_CANNON_PACK_FOLDER + DIR_SEP;
+}
+
+std::string PrimeGunCannonLibraryFolderForSlot(u32 slot)
+{
+  return File::GetUserPath(D_LOAD_IDX) + PRIMEGUN_CANNON_LIBRARY_FOLDER + DIR_SEP + "slot_" +
+         std::to_string(slot) + DIR_SEP;
+}
+
+std::string PrimeGunCannonActivePath(std::string_view texture_name, std::string_view extension)
+{
+  return PrimeGunCannonActiveFolder() + std::string(texture_name) + std::string(extension);
+}
+
+std::string PrimeGunCannonSourcePath(u32 slot, std::string_view texture_name)
+{
+  const std::string slot_folder = PrimeGunCannonLibraryFolderForSlot(slot);
+  const std::string dds_path = slot_folder + std::string(texture_name) + ".dds";
+  if (File::Exists(dds_path))
+    return dds_path;
+
+  const std::string png_path = slot_folder + std::string(texture_name) + ".png";
+  return File::Exists(png_path) ? png_path : std::string();
+}
+
+void PrimeGunCannonRegisterPack()
+{
+  const std::string active_folder = PrimeGunCannonActiveFolder();
+  File::CreateDirs(active_folder);
+  const std::string gameids_folder = active_folder + "gameids" DIR_SEP;
+  File::CreateDirs(gameids_folder);
+  const std::string gameids_path =
+      gameids_folder + std::string(PRIMEGUN_CANNON_GAME_ID) + ".txt";
+  if (!File::Exists(gameids_path))
+    File::CreateEmptyFile(gameids_path);
+}
+
+void PrimeGunCannonRefreshHiresMap(
+    const std::array<std::string, PRIMEGUN_CANNON_TEXTURE_NAMES.size()>& active_paths)
+{
+  for (const char* texture_name : PRIMEGUN_CANNON_TEXTURE_NAMES)
+    HiresTexture::RemoveAssetPath(texture_name);
+
+  HiresTexture::Update();
+
+  for (size_t i = 0; i < PRIMEGUN_CANNON_TEXTURE_NAMES.size(); ++i)
+  {
+    if (!active_paths[i].empty())
+      HiresTexture::SetAssetPath(PRIMEGUN_CANNON_TEXTURE_NAMES[i], active_paths[i]);
+    HiresTexture::MarkDirty(PRIMEGUN_CANNON_TEXTURE_NAMES[i]);
+  }
+
+  AsyncRequests::GetInstance()->PushEvent([] {
+    if (g_texture_cache)
+      g_texture_cache->Invalidate();
+  });
+}
+
+bool ApplyPrimeGunCannonTextureSlot(u32 slot)
+{
+  PrimeGunCannonRegisterPack();
+
+  for (const char* texture_name : PRIMEGUN_CANNON_TEXTURE_NAMES)
+  {
+    File::Delete(PrimeGunCannonActivePath(texture_name, ".dds"),
+                 File::IfAbsentBehavior::NoConsoleWarning);
+    File::Delete(PrimeGunCannonActivePath(texture_name, ".png"),
+                 File::IfAbsentBehavior::NoConsoleWarning);
+  }
+
+  std::array<std::string, PRIMEGUN_CANNON_TEXTURE_NAMES.size()> active_paths{};
+  if (slot != 0)
+  {
+    bool copied_any = false;
+    for (size_t i = 0; i < PRIMEGUN_CANNON_TEXTURE_NAMES.size(); ++i)
+    {
+      const std::string source_path =
+          PrimeGunCannonSourcePath(slot, PRIMEGUN_CANNON_TEXTURE_NAMES[i]);
+      if (source_path.empty())
+        continue;
+
+      const std::filesystem::path source_fs(source_path);
+      const std::string extension = source_fs.extension().string();
+      const std::string dest_path =
+          PrimeGunCannonActivePath(PRIMEGUN_CANNON_TEXTURE_NAMES[i], extension);
+      File::CreateFullPath(dest_path);
+      if (!File::Copy(source_path, dest_path, true))
+      {
+        WARN_LOG_FMT(VIDEO, "PrimeGun: Failed to apply cannon texture '{}' from '{}'.",
+                     PRIMEGUN_CANNON_TEXTURE_NAMES[i], source_path);
+        continue;
+      }
+
+      active_paths[i] = dest_path;
+      copied_any = true;
+    }
+
+    if (!copied_any)
+      return false;
+  }
+
+  Config::SetBaseOrCurrent(Config::GFX_HIRES_TEXTURES, true);
+  UpdateActiveConfig();
+  PrimeGunCannonRefreshHiresMap(active_paths);
+  return true;
+}
+
 u32 VrMenuItemCountForTab(u32 tab)
 {
   switch (tab)
@@ -1817,6 +1949,8 @@ u32 VrMenuItemCountForTab(u32 tab)
     return 8;
   case 4:
     return 2;
+  case VR_MENU_CANNON_TAB:
+    return 6;
   default:
     return 4;
   }
@@ -2154,6 +2288,19 @@ void ActivateVrMenuSelection(RuntimeSettings* settings)
       settings->rot_offset_z = -90.0f;
     }
   }
+
+  if (s_vr_menu_tab == VR_MENU_CANNON_TAB)
+  {
+    if (s_vr_menu_selected_index <= 5)
+    {
+      if (ApplyPrimeGunCannonTextureSlot(s_vr_menu_selected_index))
+      {
+        s_vr_cannon_texture_slot = s_vr_menu_selected_index;
+        s_vr_cannon_texture_notice_until_frame = s_frame_counter + 180;
+      }
+      return;
+    }
+  }
 }
 
 void SaveVrMenuSettingsNotice()
@@ -2176,6 +2323,8 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.tab = s_vr_menu_tab;
   overlay.selected_index = s_vr_menu_selected_index;
   overlay.item_count = VrMenuItemCountForTab(s_vr_menu_tab);
+  overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
+  overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
   overlay.weapon_panel_visible = previous.weapon_panel_visible;
   overlay.weapon_selected_index = previous.weapon_selected_index;
   overlay.weapon_panel_position = previous.weapon_panel_position;
@@ -2271,13 +2420,13 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
     }
     if (left_tab && !s_last_vr_menu_stick_left)
     {
-      s_vr_menu_tab = s_vr_menu_tab == 0 ? 4 : s_vr_menu_tab - 1;
+      s_vr_menu_tab = s_vr_menu_tab == 0 ? VR_MENU_TAB_COUNT - 1 : s_vr_menu_tab - 1;
       s_vr_menu_selected_index = 0;
       ++s_vr_menu_generation;
     }
     if (right_tab && !s_last_vr_menu_stick_right)
     {
-      s_vr_menu_tab = (s_vr_menu_tab + 1) % 5;
+      s_vr_menu_tab = (s_vr_menu_tab + 1) % VR_MENU_TAB_COUNT;
       s_vr_menu_selected_index = 0;
       ++s_vr_menu_generation;
     }
@@ -2295,9 +2444,12 @@ void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettin
       const float texture_y = std::clamp(pointer_y, 0.0f, 1.0f) * 512.0f;
       if (pointer_active && texture_y >= 64.0f && texture_y <= 102.0f)
       {
-        const int tab = static_cast<int>((texture_x - 36.0f) / 190.0f);
-        const float tab_local_x = texture_x - (36.0f + static_cast<float>(tab) * 190.0f);
-        if (tab >= 0 && tab < 5 && tab_local_x >= 0.0f && tab_local_x <= 180.0f &&
+        constexpr float tab_step = 162.0f;
+        constexpr float tab_width = 150.0f;
+        const int tab = static_cast<int>((texture_x - 36.0f) / tab_step);
+        const float tab_local_x = texture_x - (36.0f + static_cast<float>(tab) * tab_step);
+        if (tab >= 0 && tab < static_cast<int>(VR_MENU_TAB_COUNT) && tab_local_x >= 0.0f &&
+            tab_local_x <= tab_width &&
             s_vr_menu_tab != static_cast<u32>(tab))
         {
           s_vr_menu_tab = static_cast<u32>(tab);
@@ -3097,6 +3249,7 @@ void ResetNativeRuntime()
   s_vr_menu_selected_index = 0;
   ++s_vr_menu_generation;
   s_vr_menu_saved_notice_until_frame = 0;
+  s_vr_cannon_texture_notice_until_frame = 0;
   s_height_prompt_until_frame = 0;
   s_prompt_gameplay_ready_since_frame = 0;
   s_prompt_first_ready_timeout_frame = 0;

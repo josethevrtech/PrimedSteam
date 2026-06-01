@@ -74,6 +74,8 @@ struct PrimeGunVrOverlayState
   uint32_t tab = 0;
   uint32_t selected_index = 0;
   uint32_t item_count = 0;
+  uint32_t cannon_texture_slot = 0;
+  bool cannon_texture_notice = false;
   uint32_t weapon_selected_index = 0;
   std::array<float, 3> weapon_panel_position{};
   std::array<float, 4> weapon_panel_orientation{0.0f, 0.0f, 0.0f, 1.0f};
