@@ -49,7 +49,14 @@ Flatpak folders are:
 On first launch, `Flatpak/dolphin-emu-wrapper` copies the bundled defaults from
 `/app/share/dolphin-emu/User` into those writable folders. Config, GameSettings,
 and GameSettingsVR are applied so the included PrimedGun defaults take effect.
-Save data folders such as `GC` are copied without overwriting existing files.
+The wrapper also patches the Linux sandbox settings to use the Vulkan graphics
+backend and keeps the bundled cannon texture library available under
+`Load/PrimedGun/CannonTextures`. Save data folders such as `GC` are copied
+without overwriting existing files.
+
+Existing Flatpak installs are migrated with a versioned seed marker, so updated
+defaults can be applied after a package update without requiring users to delete
+their whole sandbox.
 
 If an older broken Flatpak already created bad default settings, reinstalling the
 bundle may not be enough. To force a clean Flatpak sandbox, run:

@@ -78,6 +78,16 @@ modules:
       - install -Dm755 ../Flatpak/dolphin-emu-wrapper ${FLATPAK_DEST}/bin/primedgun-wrapper
       - install -d ${FLATPAK_DEST}/bin/assets
       - cp -a ../assets/. ${FLATPAK_DEST}/bin/assets/
+      - install -d ${FLATPAK_DEST}/share/dolphin-emu/User/Config
+      - cp -a ../Data/User/Config/. ${FLATPAK_DEST}/share/dolphin-emu/User/Config/
+      - install -d ${FLATPAK_DEST}/share/dolphin-emu/User/GameSettings
+      - cp -a ../Data/User/GameSettings/. ${FLATPAK_DEST}/share/dolphin-emu/User/GameSettings/
+      - install -d ${FLATPAK_DEST}/share/dolphin-emu/User/GameSettingsVR
+      - cp -a ../Data/User/GameSettingsVR/. ${FLATPAK_DEST}/share/dolphin-emu/User/GameSettingsVR/
+      - install -d ${FLATPAK_DEST}/share/dolphin-emu/User/Load
+      - cp -a ../Data/User/Load/. ${FLATPAK_DEST}/share/dolphin-emu/User/Load/
+      - install -d ${FLATPAK_DEST}/share/dolphin-emu/User/ResourcePacks
+      - cp -a ../Data/User/ResourcePacks/. ${FLATPAK_DEST}/share/dolphin-emu/User/ResourcePacks/
       - desktop-file-edit --set-key=Exec --set-value='/app/bin/primedgun-wrapper'
         --set-key=Name --set-value='PrimedGun'
         --set-key=GenericName --set-value='Metroid Prime VR Launcher'
