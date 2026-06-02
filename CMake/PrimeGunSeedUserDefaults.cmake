@@ -19,6 +19,18 @@ file(GLOB_RECURSE primegun_user_default_entries
 )
 
 foreach(relative_path IN LISTS primegun_user_default_entries)
+  if(relative_path MATCHES "^(Cache|Dump|Logs|GC|Wii)(/|$)")
+    continue()
+  endif()
+
+  if(relative_path MATCHES "(^|/)[^/]*\\.(bak|cache|log|gci|raw)$")
+    continue()
+  endif()
+
+  if(relative_path MATCHES "(^|/)(SYSCONF|fst\\.bin)$")
+    continue()
+  endif()
+
   set(source_path "${PRIMEGUN_USER_DEFAULTS_SOURCE}/${relative_path}")
   set(dest_path "${PRIMEGUN_USER_DEFAULTS_DEST}/${relative_path}")
 
