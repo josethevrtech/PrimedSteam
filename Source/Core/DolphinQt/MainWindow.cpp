@@ -1599,7 +1599,7 @@ void MainWindow::ConnectStack()
   header_layout->setContentsMargins(14, 12, 14, 12);
   auto* brand = new QLabel(tr("PrimedGun"), header);
   brand->setObjectName(QStringLiteral("PrimedGunTitle"));
-  auto* version = new QLabel(tr("v0.9.9d"), header);
+  auto* version = new QLabel(tr("v0.9.9e"), header);
   version->setObjectName(QStringLiteral("PrimedGunMuted"));
   auto* status_tracking = new QLabel(tr("Waiting for DolphinXR OpenXR"), header);
   status_tracking->setObjectName(QStringLiteral("PrimedGunBad"));
@@ -2318,7 +2318,7 @@ void MainWindow::ConnectStack()
   auto* footer = new QHBoxLayout;
   auto* reset_all = new QPushButton(tr("Reset All"), game_tab);
   auto* save_settings_button = new QPushButton(tr("Save Settings"), game_tab);
-  auto* credit = new QLabel(tr("By Nobbie   v0.9.9d"), game_tab);
+  auto* credit = new QLabel(tr("By Nobbie   v0.9.9e"), game_tab);
   credit->setObjectName(QStringLiteral("PrimedGunMuted"));
   footer->addWidget(reset_all);
   footer->addWidget(save_settings_button);

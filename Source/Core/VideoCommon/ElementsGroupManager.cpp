@@ -38,6 +38,27 @@ struct ParsedElementGroupOverrideFile
   std::set<std::string> enabled_names;
 };
 
+bool IsPrimeGunMapOrPauseLayer(MetroidElementLayer layer)
+{
+  switch (layer)
+  {
+  case MetroidElementLayer::Map:
+  case MetroidElementLayer::Map0:
+  case MetroidElementLayer::Map1:
+  case MetroidElementLayer::Map2:
+  case MetroidElementLayer::Dialog:
+  case MetroidElementLayer::MapMap:
+  case MetroidElementLayer::MapLegend:
+  case MetroidElementLayer::InventorySamus:
+  case MetroidElementLayer::InventorySamusOutline:
+  case MetroidElementLayer::MapNorth:
+  case MetroidElementLayer::MousePointer:
+    return true;
+  default:
+    return false;
+  }
+}
+
 std::string ReadFileWithoutElementSections(const std::string& path)
 {
   std::ifstream file(path);
@@ -1564,6 +1585,9 @@ void ElementsGroupManager::ClassifyProfileDraw(DrawRecord* draw,
   draw->profile_id = selected_profile;
   draw->profile_layer = selected_layer;
   draw->profile_layer_name = std::string(MetroidElementLayerToDisplayName(selected_layer));
+
+  if (IsPrimeGunMapOrPauseLayer(selected_layer))
+    ShaderHunter::GetInstance().RegisterExternalFlag("primedgun_map_or_pause");
 }
 
 ElementsGroupManager::PreviewAction ElementsGroupManager::RegisterDraw(const DrawRecord& draw)

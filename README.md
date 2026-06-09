@@ -1,5 +1,7 @@
 # PrimedGun
 
+![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
+
 PrimedGun is a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience.
 
 ## Build - Windows
@@ -80,7 +82,6 @@ For distribution, use the contents of `Binary\x64`. The important runtime pieces
 - `User/`
 - `QtPlugins/`
 - `COPYING`
-- `README.md`
 - `qt.conf`
 - `Qt6Core.dll`
 - `Qt6Gui.dll`
@@ -96,6 +97,7 @@ For distribution, use the contents of `Binary\x64`. The important runtime pieces
 - VR arm cannon tracking.
 - One-click height calibration.
 - Cannon position, rotation calibration.
+- Easy cannon texture swapping tool.
 - In-headset settings menu.
 
 ## Credits

@@ -34,6 +34,7 @@
 
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/HiresTextures.h"
+#include "VideoCommon/ShaderHunter.h"
 #include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -191,6 +192,7 @@ RuntimeSettings s_settings;
 u64 s_frame_counter = 0;
 bool s_game_was_active = false;
 bool s_patches_applied_this_boot = false;
+u64 s_last_patch_watchdog_frame = 0;
 bool s_scan_was_active = false;
 u32 s_scan_last_player = 0;
 u32 s_scan_normal_frames = 0;
@@ -246,6 +248,7 @@ bool s_have_mode_probe_words = false;
 u64 s_last_scan_reticle_trace_frame = 0;
 bool s_have_dumped_scan_indicator_code = false;
 u32 s_last_validated_gun = 0;
+bool s_cannon_hand_pose_ready = false;
 bool s_smooth_matrix_valid = false;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                              0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
@@ -2979,8 +2982,22 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
 
   const Common::VR::OpenXRControllerState& hand =
       snapshot.controllers[settings.use_right_hand ? 1 : 0];
-  if (!hand.connected || !hand.aim_pose.valid)
+  const bool hand_pose_ready = hand.connected && hand.aim_pose.valid;
+  if (!hand_pose_ready)
+  {
+    s_cannon_hand_pose_ready = false;
     return;
+  }
+
+  if (!s_cannon_hand_pose_ready)
+  {
+    s_cannon_hand_pose_ready = true;
+    s_smooth_matrix_valid = false;
+    s_last_validated_gun = 0;
+    TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
+    WriteGunTargetScratch(guard, 0, 0xffffu);
+    TryWriteU32(guard, RETICLE_BILLBOARD_SCRATCH, 0);
+  }
 
   UpdateHeightOnlyReset(snapshot, hand, settings);
 
@@ -3600,6 +3617,59 @@ void ApplyBuiltinPatches(Core::System& system, const Core::CPUThreadGuard& guard
   if (wrote_instruction)
     system.GetJitInterface().InvalidateICache(0x80000000u, 0x00200000u, true);
 }
+
+bool BuiltinPatchGroupApplied(const Core::CPUThreadGuard& guard, const RuntimeSettings& settings,
+                              u32 group)
+{
+  std::call_once(s_parse_builtin_patches_once, ParseBuiltinPatches);
+  if (!PatchGroupEnabled(settings, group))
+    return true;
+
+  bool saw_group = false;
+  for (const PatchWrite& patch : s_builtin_patches)
+  {
+    if (patch.group != group)
+      continue;
+
+    saw_group = true;
+    const auto current = PowerPC::MMU::HostTryRead<u32>(guard, patch.address);
+    if (!current || current->value != patch.value)
+      return false;
+  }
+
+  return saw_group;
+}
+
+void VerifyCriticalBuiltinPatches(Core::System& system, const Core::CPUThreadGuard& guard,
+                                  const RuntimeSettings& settings, bool have_player)
+{
+  if (!settings.builtin_patches_enabled || !have_player)
+    return;
+
+  const bool startup_window = s_frame_counter < 600u;
+  const u64 interval = startup_window ? 5u : 30u;
+  if (s_frame_counter < s_last_patch_watchdog_frame + interval)
+    return;
+
+  s_last_patch_watchdog_frame = s_frame_counter;
+  if (BuiltinPatchGroupApplied(guard, settings, PatchCannonRotation) &&
+      BuiltinPatchGroupApplied(guard, settings, PatchGunRayTarget) &&
+      BuiltinPatchGroupApplied(guard, settings, PatchReticle))
+  {
+    return;
+  }
+
+  s_patches_applied_this_boot = false;
+  ApplyBuiltinPatches(system, guard);
+  system.GetJitInterface().InvalidateICache(0x80000000u, 0x00200000u, true);
+}
+
+void UpdateShaderHunterGameFlowFlags(const Core::CPUThreadGuard& guard)
+{
+  u32 gameflow_menu = 0;
+  if (TryReadU32(guard, GAMEFLOW_MENU_SCRATCH, &gameflow_menu) && gameflow_menu == 1)
+    ShaderHunter::GetInstance().RegisterExternalFlag("primedgun_map_or_pause");
+}
 }  // namespace
 
 void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
@@ -3628,6 +3698,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   if (!s_game_was_active)
     TryWriteU32(guard, GAMEFLOW_MENU_SCRATCH, 0);
   s_game_was_active = true;
+  UpdateShaderHunterGameFlowFlags(guard);
 
   bool dynamic_patch_applied = false;
   if (settings.builtin_patches_enabled)
@@ -3665,6 +3736,7 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
       DumpScanIndicatorCodeOnce(guard);
     LogScanReticleTrace(guard, player);
   }
+  VerifyCriticalBuiltinPatches(system, guard, settings, have_player);
   if (RuntimeLoggingEnabled())
   {
     if (!s_have_logged_gameplay_input_active ||
@@ -3713,6 +3785,7 @@ bool IsOrbitLockActive()
 void ResetNativeRuntime()
 {
   s_patches_applied_this_boot = false;
+  s_last_patch_watchdog_frame = 0;
   s_frame_counter = 0;
   s_scan_was_active = false;
   s_scan_last_player = 0;
@@ -3742,6 +3815,7 @@ void ResetNativeRuntime()
   s_last_scan_reticle_trace_frame = 0;
   s_have_dumped_scan_indicator_code = false;
   s_last_validated_gun = 0;
+  s_cannon_hand_pose_ready = false;
   s_smooth_matrix_valid = false;
   s_controller_base_x = 0.0f;
   s_controller_base_y = 0.0f;
