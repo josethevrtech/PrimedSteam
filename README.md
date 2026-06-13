@@ -18,6 +18,8 @@ The built app is written to `Binary\x64\PrimedGun.exe`.
 
 ## Build - Linux
 
+Install the usual C++/Qt/Vulkan development packages for your distro first.
+
 ```bash
 git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
 cd PrimedGun
@@ -61,6 +63,6 @@ For Windows distribution, use the contents of `Binary\x64`. The important runtim
 
 - Created by Nobbie.
 - Thank you to the Metroid Prime modding community for the resources and research that helped make this possible.
-- Huge thank you to iChris4 for Dolphin ReduX development.
+- Huge thank you to iChris4 for Dolphin ReduX development, and to the Dolphin team.
 - Thank you to the early testers: GeekyGami, Lucaspec72, TorchRing, detective_yoshi, PHA3ESH1FTGAMES, retrovideogamer, Samevi, Mochu, VideoGameEsoterica and VRified Games.
 - For further enhancements to your VR experience, join the Dolphin VR Discord: https://discord.gg/GdmffzCTrh
