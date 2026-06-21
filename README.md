@@ -65,7 +65,8 @@ For Windows distribution, use the contents of `Binary\x64`. The important runtim
 
 - HMD refresh rate set to 120 Hz is recommended.
 - Meta's own OpenXR environment is not recommended; try SteamVR or VD instead.
-- Select your Metroid Prime GameCube game file.
+- Run the app and select your Metroid Prime NTSC Revision 0 GameCube game file.
+- Checkout the Layout tab for controller bindings.
 - Transfer your memory card into `User\GC` if you want existing saves.
 - Once in game, click the right stick to set your height.
 - Click the left thumbstick to open or close the in-headset settings menu.
