@@ -68,7 +68,7 @@ For Windows distribution, use the contents of `Binary\x64`. The important runtim
 - Meta's own OpenXR environment is not recommended; try SteamVR or VD instead.
 - Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
 - Checkout the Layout tab for controller bindings.
-- Transfer your memory card into `User\GC` if you want existing saves.
+- Transfer your memory card into `User\GC` then select the save in dolphin settings if you want existing saves.
 - Once in game, click the right stick to set your height.
 - Click the left thumbstick to open or close the in-headset settings menu.
 - Try to stay in the centre of your play space and face forward for the best interaction.
