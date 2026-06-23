@@ -304,7 +304,7 @@ void PrimedGunRemoveCannonSlotTextureFiles(int slot, int texture_index)
   QFile::remove(PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds")));
 }
 
-void PrimedGunRemoveActiveCannonTextureFiles(int texture_index)
+[[maybe_unused]] void PrimedGunRemoveActiveCannonTextureFiles(int texture_index)
 {
   QFile::remove(PrimedGunCannonActivePath(texture_index, QStringLiteral(".png")));
   QFile::remove(PrimedGunCannonActivePath(texture_index, QStringLiteral(".dds")));
@@ -1898,10 +1898,10 @@ void MainWindow::ConnectStack()
     row->addWidget(plus);
     parent_layout->addLayout(row);
     QObject::connect(slider, &QSlider::valueChanged, spin, [spin, step, setter, apply_runtime](int v) {
-      const double value = v * step;
-      if (spin->value() != value)
-        spin->setValue(value);
-      setter(static_cast<float>(value));
+      const double snapped_value = v * step;
+      if (spin->value() != snapped_value)
+        spin->setValue(snapped_value);
+      setter(static_cast<float>(snapped_value));
       apply_runtime();
     });
     QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), slider,
@@ -2177,8 +2177,8 @@ void MainWindow::ConnectStack()
         return;
       }
 
-      QSettings& settings = Settings::GetQSettings();
-      settings.setValue(PrimedGunCannonSlotSetting(slot, texture_index), destination);
+      QSettings& import_texture_settings = Settings::GetQSettings();
+      import_texture_settings.setValue(PrimedGunCannonSlotSetting(slot, texture_index), destination);
       PrimedGunSetCannonPathLabel(cannon_texture_path_labels[texture_index],
                                  QDir::toNativeSeparators(destination));
       PrimedGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], destination);
@@ -2192,7 +2192,7 @@ void MainWindow::ConnectStack()
                                     cannon_texture_preview_labels, cannon_texture_import_buttons,
                                     cannon_status] {
     const int slot = cannon_slot_group->checkedId();
-    QSettings& settings = Settings::GetQSettings();
+    QSettings& refresh_texture_settings = Settings::GetQSettings();
     for (int texture_index = 0;
          texture_index < static_cast<int>(PRIMEGUN_CANNON_TEXTURE_NAMES.size()); ++texture_index)
     {
@@ -2207,10 +2207,10 @@ void MainWindow::ConnectStack()
       }
 
       const QString setting_key = PrimedGunCannonSlotSetting(slot, texture_index);
-      const QString stored_path = settings.value(setting_key).toString();
+      const QString stored_path = refresh_texture_settings.value(setting_key).toString();
       const QString path = PrimedGunResolveCannonTextureSource(slot, texture_index, stored_path);
       if (path != stored_path)
-        settings.setValue(setting_key, path);
+        refresh_texture_settings.setValue(setting_key, path);
       PrimedGunSetCannonPathLabel(label, path.isEmpty() ? QObject::tr("No texture imported") :
                                                    QDir::toNativeSeparators(path));
       PrimedGunSetCannonPreviewLabel(cannon_texture_preview_labels[texture_index], path);
@@ -2307,10 +2307,10 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    QSettings& settings = Settings::GetQSettings();
-    settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
+    QSettings& remove_shine_settings = Settings::GetQSettings();
+    remove_shine_settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
                       destination);
-    settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
+    remove_shine_settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
     if (!PrimedGunApplyCannonTextureSlot(slot, &error))
     {
@@ -2367,10 +2367,10 @@ void MainWindow::ConnectStack()
       return;
     }
 
-    QSettings& settings = Settings::GetQSettings();
-    settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
+    QSettings& restore_shine_settings = Settings::GetQSettings();
+    restore_shine_settings.setValue(PrimedGunCannonSlotSetting(slot, PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX),
                       destination);
-    settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
+    restore_shine_settings.setValue(QStringLiteral("primegun/cannon_texture_slot"), slot);
 
     QString error;
     if (!PrimedGunApplyCannonTextureSlot(slot, &error))

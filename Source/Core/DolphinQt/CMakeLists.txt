@@ -725,3 +725,46 @@ if(USE_RETRO_ACHIEVEMENTS)
     target_compile_definitions(dolphin-emu PRIVATE -DRC_CLIENT_SUPPORTS_RAINTEGRATION)
   endif()
 endif()
+
+# Qt6 private QPA header fix.
+# MainWindow.cpp includes <qpa/qplatformnativeinterface.h>.
+# Prefer Qt's private CMake target when available; otherwise derive the versioned private include path.
+if(TARGET Qt6::GuiPrivate)
+  target_link_libraries(dolphin-emu PRIVATE Qt6::GuiPrivate)
+else()
+  get_target_property(_qt6_gui_include_dirs Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
+  set(_primedgun_qpa_header_found OFF)
+
+  foreach(_qt6_gui_include_dir IN LISTS _qt6_gui_include_dirs)
+    foreach(_qt6_version IN ITEMS "${Qt6Gui_VERSION}" "${Qt6_VERSION}" "${Qt6Core_VERSION}")
+      if(NOT _qt6_version)
+        continue()
+      endif()
+
+      set(_primedgun_qpa_candidates
+        "${_qt6_gui_include_dir}/${_qt6_version}/QtGui"
+        "${_qt6_gui_include_dir}/QtGui/${_qt6_version}/QtGui"
+      )
+
+      foreach(_primedgun_qpa_include_dir IN LISTS _primedgun_qpa_candidates)
+        if(EXISTS "${_primedgun_qpa_include_dir}/qpa/qplatformnativeinterface.h")
+          target_include_directories(dolphin-emu PRIVATE "${_primedgun_qpa_include_dir}")
+          set(_primedgun_qpa_header_found ON)
+          break()
+        endif()
+      endforeach()
+
+      if(_primedgun_qpa_header_found)
+        break()
+      endif()
+    endforeach()
+
+    if(_primedgun_qpa_header_found)
+      break()
+    endif()
+  endforeach()
+
+  if(NOT _primedgun_qpa_header_found)
+    message(FATAL_ERROR "Could not find Qt6 private QPA header qplatformnativeinterface.h. Install Qt6 private development headers or remove the qpa/qplatformnativeinterface.h dependency.")
+  endif()
+endif()

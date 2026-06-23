@@ -53,7 +53,7 @@ u32 ParseOptionalHexField(const QString& text, bool* ok)
   return parsed_text.isEmpty() ? 0u : parsed_text.toUInt(ok, 16);
 }
 
-QString PathLeaf(QString path)
+[[maybe_unused]] QString PathLeaf(QString path)
 {
   return QFileInfo(path).fileName();
 }

@@ -611,3 +611,13 @@ elseif(ANDROID AND INSTALL_TO_ARCHITECTURE_PREFIXES)
         "${CMAKE_CURRENT_BINARY_DIR}/additional_manifest.mf"
     )
 endif()
+
+# OpenXR loader exception fix:
+# The loader uses C++ catch blocks, so this target cannot inherit disabled exceptions.
+if(TARGET openxr_loader)
+  if(MSVC)
+    target_compile_options(openxr_loader PRIVATE /EHsc)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(openxr_loader PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>)
+  endif()
+endif()
