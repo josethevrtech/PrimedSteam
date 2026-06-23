@@ -4,7 +4,34 @@
 
 PrimedSteam is a SteamOS-focused build of PrimedGun, a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience by Nobbie248.
 
-This guide is written for SteamOS users who are new to Linux.
+## About this fork
+
+PrimedSteam is not intended to replace or take credit for the original PrimedGun project.
+
+This fork exists to make PrimedGun easier to build and run on SteamOS, especially for users who are new to Linux or using SteamOS as their main desktop/VR system.
+
+Original PrimedGun credit goes to Nobbie248. This repository adds SteamOS-focused build fixes, documentation, and helper scripts.
+
+These instructions are for this PrimedSteam fork. They are not guaranteed to work with the original upstream PrimedGun repository unless the same SteamOS build patches and scripts are applied there.
+
+## What this fork changes
+
+This fork keeps the project focused on SteamOS compatibility and build reliability.
+
+Current SteamOS-focused changes include:
+
+* Added a simple Linux/SteamOS build script: `scripts/build-linux.sh`
+* Added SteamOS build documentation: `BUILDING-LINUX.md`
+* Updated the README for new SteamOS users
+* Added pacman keyring setup instructions for fresh SteamOS installs
+* Added SteamOS dependency instructions
+* Added guidance for SteamOS update-channel issues
+* Fixed OpenXR loader builds when exception handling is disabled globally
+* Fixed Qt private QPA header detection without hardcoding a Qt version
+* Cleaned up small compiler warnings that affected the SteamOS build
+
+This fork does not distribute games, ROMs, BIOS files, Nintendo system files, copyrighted texture packs, or Steam/Valve runtime files.
+
 
 ## Verified system
 
