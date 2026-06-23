@@ -158,20 +158,6 @@ git submodule update --init --recursive
 ./scripts/build-linux.sh
 ```
 
-## Build in a custom folder
-
-You can choose a different build folder:
-
-```bash
-./scripts/build-linux.sh build-steamos
-```
-
-or:
-
-```bash
-./scripts/build-linux.sh build-portable-test
-```
-
 ## Legal notes
 
 This repository contains source code, build scripts, and documentation only.
