@@ -4,7 +4,7 @@
 
 PrimedSteam is a SteamOS-focused build of PrimedGun, a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience by Nobbie248.
 
-The current target is SteamOS on x86_64 hardware.
+This guide is written for SteamOS users who are new to Linux.
 
 ## Verified system
 
@@ -18,21 +18,31 @@ RAM: 32 GiB
 GPU: AMD Radeon RX 7900 GRE
 ```
 
-## SteamOS quick start
+## What this guide does
 
-Run these commands from the PrimedSteam repo folder.
+This guide will help you:
 
-### 1. Allow package installs
+1. Prepare SteamOS for building software
+2. Install the required build tools
+3. Download PrimedSteam
+4. Build PrimedGun
+5. Launch it
 
-SteamOS uses a read-only root filesystem by default. Temporarily disable it:
+## Start here
+
+Go to **Desktop Mode**, open **Konsole**, then run the commands below.
+
+## 1. Allow package installs
+
+SteamOS normally protects the system files. Temporarily allow package installs:
 
 ```bash
 sudo steamos-readonly disable
 ```
 
-### 2. Prepare the pacman keyring
+## 2. Prepare the SteamOS package keyring
 
-This is included for new SteamOS users and for systems that recently changed update channels.
+Run this before installing packages. This helps avoid keyring errors on new SteamOS installs or after update-channel changes.
 
 ```bash
 sudo install -d -m 755 /etc/pacman.d/gnupg
@@ -46,7 +56,7 @@ done
 sudo pacman -Syy
 ```
 
-### 3. Install build dependencies
+## 3. Install the required tools
 
 ```bash
 sudo pacman -S git base-devel cmake ninja pkgconf clang libglvnd \
@@ -58,25 +68,70 @@ sudo pacman -S git base-devel cmake ninja pkgconf clang libglvnd \
   glibc linux-api-headers
 ```
 
-### 4. Prepare the source tree
+## 4. Download PrimedSteam
 
-```bash
-git submodule update --init --recursive
+Choose a place to keep the source code.
+
+This example uses:
+
+```text
+~/Dev
 ```
 
-### 5. Build
+Run:
+
+```bash
+mkdir -p ~/Dev
+cd ~/Dev
+
+git clone --recursive https://github.com/josethevrtech/PrimedSteam.git
+cd PrimedSteam
+```
+
+## 5. Build PrimedGun
 
 ```bash
 ./scripts/build-linux.sh
 ```
 
-The binary will be created here:
+The finished app will be created here:
 
 ```text
 build-linux/Binaries/PrimedGun
 ```
 
-## Custom build folder
+## 6. Check that it built correctly
+
+```bash
+ldd build-linux/Binaries/PrimedGun | grep "not found" || echo "runtime libs OK"
+```
+
+If you see:
+
+```text
+runtime libs OK
+```
+
+you are good.
+
+## 7. Launch PrimedGun
+
+```bash
+./build-linux/Binaries/PrimedGun
+```
+
+## Updating later
+
+To update the source code and rebuild:
+
+```bash
+cd ~/Dev/PrimedSteam
+git pull
+git submodule update --init --recursive
+./scripts/build-linux.sh
+```
+
+## Build in a custom folder
 
 You can choose a different build folder:
 
@@ -90,55 +145,45 @@ or:
 ./scripts/build-linux.sh build-portable-test
 ```
 
-## Verify and launch
+## Troubleshooting
 
-Check for missing runtime libraries:
+### `cmake: command not found`
 
-```bash
-ldd build-linux/Binaries/PrimedGun | grep "not found" || echo "runtime libs OK"
-```
-
-Launch:
-
-```bash
-./build-linux/Binaries/PrimedGun
-```
-
-## SteamOS troubleshooting
-
-SteamOS updates or update-channel changes can remove build tools, reset headers, or break package metadata.
-
-If `cmake` is missing:
+Install CMake and Ninja again:
 
 ```bash
 sudo pacman -S cmake ninja base-devel
 ```
 
-If `EGL/egl.h` is missing:
+### `EGL/egl.h: No such file or directory`
+
+Reinstall `libglvnd`:
 
 ```bash
 sudo pacman -S libglvnd
 ```
 
-If Qt private QPA headers are missing:
+### Qt private QPA header errors
+
+Reinstall the Qt packages:
 
 ```bash
 sudo pacman -S qt6-base qt6-svg qt6-tools qt6-wayland
 ```
 
-If pacman shows keyring errors, rerun the pacman keyring step above.
+### Pacman keyring errors
+
+Rerun the package keyring step near the top of this guide.
 
 ## Recommended location
 
-Keep the repo and build output on persistent storage, not inside the SteamOS root filesystem.
+For a normal SteamOS desktop, `~/Dev/PrimedSteam` is simple and easy.
 
-Example:
+For a separate storage drive, a good location is:
 
 ```text
 /var/mnt/Storage/Dev/PrimedSteam
 ```
-
-This helps prevent SteamOS updates from disrupting your source tree or build output.
 
 ## More build details
 
@@ -161,4 +206,3 @@ This repository does **not** distribute:
 * Local build folders such as `build-steamos/`, `build-linux/`, or `build-portable-test/`
 
 Preserve upstream license files, SPDX notices, and third-party license documentation.
-
