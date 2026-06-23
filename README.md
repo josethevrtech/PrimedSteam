@@ -172,54 +172,6 @@ or:
 ./scripts/build-linux.sh build-portable-test
 ```
 
-## Troubleshooting
-
-### `cmake: command not found`
-
-Install CMake and Ninja again:
-
-```bash
-sudo pacman -S cmake ninja base-devel
-```
-
-### `EGL/egl.h: No such file or directory`
-
-Reinstall `libglvnd`:
-
-```bash
-sudo pacman -S libglvnd
-```
-
-### Qt private QPA header errors
-
-Reinstall the Qt packages:
-
-```bash
-sudo pacman -S qt6-base qt6-svg qt6-tools qt6-wayland
-```
-
-### Pacman keyring errors
-
-Rerun the package keyring step near the top of this guide.
-
-## Recommended location
-
-For a normal SteamOS desktop, `~/Dev/PrimedSteam` is simple and easy.
-
-For a separate storage drive, a good location is:
-
-```text
-/var/mnt/Storage/Dev/PrimedSteam
-```
-
-## More build details
-
-See:
-
-```text
-BUILDING-LINUX.md
-```
-
 ## Legal notes
 
 This repository contains source code, build scripts, and documentation only.
