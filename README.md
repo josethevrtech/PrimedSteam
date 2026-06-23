@@ -1,91 +1,146 @@
-# PrimedGun
+# PrimedSteam / PrimedGun
 
-![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
+PrimedSteam is a SteamOS-focused build of PrimedGun, based on the Dolphin emulator codebase, with Linux and SteamOS build tooling included.
 
-PrimedGun is a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience.
+The current primary target is SteamOS on x86_64 hardware.
 
-## Build - Windows
+## Status
 
-Open a Visual Studio x64 Native Tools Command Prompt, then run:
+Verified on SteamOS after switching back to the main update channel:
 
-```bat
-git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
-cd PrimedGun
-git submodule update --init --recursive
-cmake -S . -B build\Release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build\Release --parallel
-```
+* Builds with GCC 15
+* Builds with CMake and Ninja
+* Launches successfully from the build output
+* Runtime library check passes with `ldd`
+* OpenXR loader builds correctly with exceptions enabled
+* Qt private QPA headers are resolved without hardcoding a Qt version
 
-The built app is written to `Binary\x64\PrimedGun.exe`.
+## Quick start for SteamOS
 
-## Build - Linux
-
-Requires GCC 12+ or Clang 15+.
+SteamOS uses a read-only root filesystem by default. Temporarily disable it before installing build dependencies:
 
 ```bash
-git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
-cd PrimedGun
-git submodule update --init --recursive
-cmake -S . -B build -G Ninja \
-  -DLINUX_LOCAL_DEV=ON \
-  -DUSE_SYSTEM_FMT=OFF
-cmake --build build --parallel
-ln -sfn ../../Data/Sys build/Binaries/Sys
+sudo steamos-readonly disable
 ```
 
-## Runtime Files
+Install the required packages:
 
-For Windows distribution, use the contents of `Binary\x64`. The important runtime pieces are:
+```bash
+sudo pacman -S git base-devel cmake ninja pkgconf clang libglvnd \
+  qt6-base qt6-svg qt6-tools qt6-wayland \
+  mesa vulkan-headers vulkan-radeon \
+  libx11 libxi libxrandr libxext libxrender libxfixes \
+  libevdev systemd-libs alsa-lib libpulse bluez-libs \
+  openal ffmpeg openxr sdl3 libxcb xcb-proto xorgproto \
+  glibc linux-api-headers
+```
 
-- `PrimedGun.exe`
-- `assets/`
-- `Licenses/`
-- `Sys/`
-- `User/`
-- `QtPlugins/`
-- `COPYING`
-- `qt.conf`
-- `Qt6Core.dll`
-- `Qt6Gui.dll`
-- `Qt6Svg.dll`
-- `Qt6Widgets.dll`
+Initialize submodules:
 
-## Features
+```bash
+git submodule update --init --recursive
+```
 
-- Full directional movement.
-- Modern VR control scheme.
-- Visor head tracking with hand gesture input.
-- Improved gun-based targeting and grapple.
-- 6DOF arm cannon tracking.
-- One-click height calibration.
-- Cannon position, rotation calibration.
-- Easy cannon texture swapping tool.
-- In-headset settings menu.
+Build:
 
-## Setup Notes
+```bash
+./scripts/build-linux.sh
+```
 
-- HMD refresh rate set to 120 Hz is recommended.
-- Meta's own OpenXR environment is not recommended; try SteamVR or VD instead.
-- Run the app and select your Metroid Prime NTSC Revision 0 (1.0) game file.
-- Checkout the Layout tab for controller bindings.
-- Transfer your memory card into `User\GC` then select the save in dolphin settings if you want existing saves.
-- Once in game, click the right stick to set your height.
-- Click the left thumbstick to open or close the in-headset settings menu.
-- Try to stay in the centre of your play space and face forward for the best interaction.
-- Use Save Settings after changing PrimedGun options to apply them.
+The binary will be generated at:
 
-## Change Controller Bindings
+```text
+build-linux/Binaries/PrimedGun
+```
 
-PrimedGun sets up the recommended controls automatically, but you can disable parts of that setup from the Controller tab. Turn off auto controller bindings, visor gesture input, or PrimedGun grip inputs there if you want to bind those controls manually.
+## Build from a custom folder
 
-By default, PrimedGun maps GameCube `Z` to the map and GameCube `Y` to missiles.
+You can pass a build directory to the script:
 
-To change bindings in Dolphin, open Dolphin Settings, go to Controllers, then choose Configure. Select `OpenXR Controller` at the top of the mapping window. Right-click any input you want to change, choose Clear, then assign the new input. When finished, name the profile and save it.
+```bash
+./scripts/build-linux.sh build-steamos
+```
 
-## Credits
+or:
 
-- Created by Nobbie.
-- Thank you to the Metroid Prime modding community for the resources and research that helped make this possible.
-- Huge thank you to iChris4 for Dolphin ReduX development, and to the Dolphin team.
-- Thank you to the early testers: GeekyGami, Lucaspec72, TorchRing, detective_yoshi, PHA3ESH1FTGAMES, retrovideogamer, Samevi, Mochu, VideoGameEsoterica and VRified Games.
-- For further enhancements to your VR experience, join the Dolphin VR Discord: https://discord.gg/GdmffzCTrh
+```bash
+./scripts/build-linux.sh build-portable-test
+```
+
+## Verify the binary
+
+```bash
+ldd build-linux/Binaries/PrimedGun | grep "not found" || echo "runtime libs OK"
+```
+
+Launch:
+
+```bash
+./build-linux/Binaries/PrimedGun
+```
+
+## SteamOS update-channel notes
+
+SteamOS update-channel changes can remove or invalidate build tools, package database state, and development headers.
+
+If `cmake` disappears:
+
+```bash
+sudo pacman -S cmake ninja base-devel
+```
+
+If `EGL/egl.h` is missing:
+
+```bash
+sudo pacman -S libglvnd
+```
+
+If Qt private QPA headers are missing, reinstall Qt packages:
+
+```bash
+sudo pacman -S qt6-base qt6-svg qt6-tools qt6-wayland
+```
+
+If the package keyring breaks after an update-channel change:
+
+```bash
+sudo install -d -m 755 /etc/pacman.d/gnupg
+sudo chown -R root:root /etc/pacman.d/gnupg
+sudo pacman-key --init
+sudo pacman-key --populate
+sudo pacman -Syy
+```
+
+## Persistent storage recommendation
+
+Keep the repo and build outputs on persistent storage, not inside the SteamOS root filesystem.
+
+Example:
+
+```text
+/var/mnt/Storage/Dev/PrimedSteam
+```
+
+This prevents source and build work from being lost or disrupted by SteamOS system updates.
+
+## More build details
+
+See:
+
+```text
+BUILDING-LINUX.md
+```
+
+## Legal notes
+
+This repository should contain source code, build scripts, and documentation only.
+
+Do not commit or distribute:
+
+* Game ISOs, ROMs, WADs, or disc images
+* Nintendo BIOS, keys, firmware, or system files
+* Copyrighted texture packs or assets you do not own
+* Steam or Valve runtime files copied from a local installation
+* Local build folders such as `build-steamos/`, `build-linux/`, or `build-portable-test/`
+
+Preserve upstream license files, SPDX notices, and third-party license documentation.
