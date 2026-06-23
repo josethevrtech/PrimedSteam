@@ -1,31 +1,52 @@
-# PrimedSteam / PrimedGun
+# PrimedSteam AKA PrimedGun for SteamOS
 
 ![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
 
-PrimedSteam is a SteamOS-focused build of PrimedGun, a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience.
+PrimedSteam is a SteamOS-focused build of PrimedGun, a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience by Nobbie248.
 
-The current primary target is SteamOS on x86_64 hardware.
+The current target is SteamOS on x86_64 hardware.
 
-## Status
+## Verified system
 
-Verified on SteamOS after switching back to the main update channel:
+Tested on:
 
-* Builds with GCC 15
-* Builds with CMake and Ninja
-* Launches successfully from the build output
-* Runtime library check passes with `ldd`
-* OpenXR loader builds correctly with exceptions enabled
-* Qt private QPA headers are resolved without hardcoding a Qt version
+```text
+SteamOS 3.9 Build: 20260617.1001
+Kernel: 6.18.33-valve2-1-neptune-618-g29c9aecca098
+CPU: AMD Ryzen 9 PRO 8945HS w/ Radeon 780M Graphics
+RAM: 32 GiB
+GPU: AMD Radeon RX 7900 GRE
+```
 
-## Quick start for SteamOS
+## SteamOS quick start
 
-SteamOS uses a read-only root filesystem by default. Temporarily disable it before installing build dependencies:
+Run these commands from the PrimedSteam repo folder.
+
+### 1. Allow package installs
+
+SteamOS uses a read-only root filesystem by default. Temporarily disable it:
 
 ```bash
 sudo steamos-readonly disable
 ```
 
-Install the required packages:
+### 2. Prepare the pacman keyring
+
+This is included for new SteamOS users and for systems that recently changed update channels.
+
+```bash
+sudo install -d -m 755 /etc/pacman.d/gnupg
+sudo chown -R root:root /etc/pacman.d/gnupg
+sudo pacman-key --init
+
+for keyring in /usr/share/pacman/keyrings/*.gpg; do
+  sudo pacman-key --populate "$(basename "$keyring" .gpg)"
+done
+
+sudo pacman -Syy
+```
+
+### 3. Install build dependencies
 
 ```bash
 sudo pacman -S git base-devel cmake ninja pkgconf clang libglvnd \
@@ -37,27 +58,27 @@ sudo pacman -S git base-devel cmake ninja pkgconf clang libglvnd \
   glibc linux-api-headers
 ```
 
-Initialize submodules:
+### 4. Prepare the source tree
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Build:
+### 5. Build
 
 ```bash
 ./scripts/build-linux.sh
 ```
 
-The binary will be generated at:
+The binary will be created here:
 
 ```text
 build-linux/Binaries/PrimedGun
 ```
 
-## Build from a custom folder
+## Custom build folder
 
-You can pass a build directory to the script:
+You can choose a different build folder:
 
 ```bash
 ./scripts/build-linux.sh build-steamos
@@ -69,7 +90,9 @@ or:
 ./scripts/build-linux.sh build-portable-test
 ```
 
-## Verify the binary
+## Verify and launch
+
+Check for missing runtime libraries:
 
 ```bash
 ldd build-linux/Binaries/PrimedGun | grep "not found" || echo "runtime libs OK"
@@ -81,11 +104,11 @@ Launch:
 ./build-linux/Binaries/PrimedGun
 ```
 
-## SteamOS update-channel notes
+## SteamOS troubleshooting
 
-SteamOS update-channel changes can remove or invalidate build tools, package database state, and development headers.
+SteamOS updates or update-channel changes can remove build tools, reset headers, or break package metadata.
 
-If `cmake` disappears:
+If `cmake` is missing:
 
 ```bash
 sudo pacman -S cmake ninja base-devel
@@ -97,25 +120,17 @@ If `EGL/egl.h` is missing:
 sudo pacman -S libglvnd
 ```
 
-If Qt private QPA headers are missing, reinstall Qt packages:
+If Qt private QPA headers are missing:
 
 ```bash
 sudo pacman -S qt6-base qt6-svg qt6-tools qt6-wayland
 ```
 
-If the package keyring breaks after an update-channel change:
+If pacman shows keyring errors, rerun the pacman keyring step above.
 
-```bash
-sudo install -d -m 755 /etc/pacman.d/gnupg
-sudo chown -R root:root /etc/pacman.d/gnupg
-sudo pacman-key --init
-sudo pacman-key --populate
-sudo pacman -Syy
-```
+## Recommended location
 
-## Persistent storage recommendation
-
-Keep the repo and build outputs on persistent storage, not inside the SteamOS root filesystem.
+Keep the repo and build output on persistent storage, not inside the SteamOS root filesystem.
 
 Example:
 
@@ -123,7 +138,7 @@ Example:
 /var/mnt/Storage/Dev/PrimedSteam
 ```
 
-This prevents source and build work from being lost or disrupted by SteamOS system updates.
+This helps prevent SteamOS updates from disrupting your source tree or build output.
 
 ## More build details
 
@@ -135,9 +150,9 @@ BUILDING-LINUX.md
 
 ## Legal notes
 
-This repository should contain source code, build scripts, and documentation only.
+This repository contains source code, build scripts, and documentation only.
 
-Do not commit or distribute:
+This repository does **not** distribute:
 
 * Game ISOs, ROMs, WADs, or disc images
 * Nintendo BIOS, keys, firmware, or system files
@@ -146,3 +161,4 @@ Do not commit or distribute:
 * Local build folders such as `build-steamos/`, `build-linux/`, or `build-portable-test/`
 
 Preserve upstream license files, SPDX notices, and third-party license documentation.
+
