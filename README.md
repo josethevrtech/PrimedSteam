@@ -1,6 +1,8 @@
 # PrimedSteam / PrimedGun
 
-PrimedSteam is a SteamOS-focused build of PrimedGun, based on the Dolphin emulator codebase, with Linux and SteamOS build tooling included.
+![PrimedGun gameplay](assets/readme/primedgun-hero.jfif)
+
+PrimedSteam is a SteamOS-focused build of PrimedGun, a Dolphin ReduX-based build focused on improving Metroid Prime's VR experience.
 
 The current primary target is SteamOS on x86_64 hardware.
 
